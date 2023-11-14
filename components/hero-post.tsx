@@ -23,7 +23,7 @@ const HeroPost = ({
     <section>
       <div className="md:grid md:grid-cols-2 md:gap-x-16 lg:gap-x-8 mb-20 md:mb-28">
         <div className="col-span-2">
-          <h3 className="mb-4 text-4xl lg:text-5xl leading-tight">
+          <h3 className="text-white mb-4 text-4xl lg:text-5xl leading-tight">
             <Link
               as={`/posts/${slug}`}
               href="/posts/[slug]"
@@ -32,7 +32,7 @@ const HeroPost = ({
               {title}
             </Link>
           </h3>
-          <div className="mb-4 md:mb-0 text-lg">
+          <div className="text-gray4 mb-4 md:mb-0 text-lg">
             <DateFormatter dateString={date} />
           </div>
           <div>

@@ -19,8 +19,8 @@ const PostPreview = ({
   slug,
 }: Props) => {
   return (
-    <div>
-      <h3 className="text-3xl mb-3 leading-snug">
+    <div className="bg-gray3 p-5 rounded-xl hover:scale-105 transition-transform">
+      <h3 className="text-white text-3xl mb-3 leading-snug">
         <Link
           as={`/posts/${slug}`}
           href="/posts/[slug]"
@@ -29,7 +29,7 @@ const PostPreview = ({
           {title}
         </Link>
       </h3>
-      <div className="text-lg mb-4">
+      <div className="text-offWhite text-lg mb-4">
         <DateFormatter dateString={date} />
       </div>
     </div>

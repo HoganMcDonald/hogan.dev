@@ -4,11 +4,20 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        'accent-1': '#FAFAFA',
-        'accent-2': '#EAEAEA',
-        'accent-7': '#333',
-        success: '#0070f3',
-        cyan: '#79FFE1',
+        black: '#171c28',
+        gray1: '#171c28',
+        gray2: '#2f3b54',
+        gray3: '#6679a4',
+        gray4: '#8695b7',
+        offWhite: '#a2aabc',
+        white: '#d7dce2',
+        gold: '#ffcc66',
+        blue: '#5ccfe6',
+        green: '#bae67e',
+        orange: '#ffae57',
+        yellow: '#ffd580',
+        purple: '#c3a6ff',
+        red: '#ef6b73'
       },
       spacing: {
         28: '7rem',
