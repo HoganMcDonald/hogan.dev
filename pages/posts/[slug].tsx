@@ -11,6 +11,9 @@ import Head from 'next/head'
 import markdownToHtml from '../../lib/markdownToHtml'
 import type PostType from '../../interfaces/post'
 
+import 'prismjs'
+import 'prismjs/components/prism-ruby'
+
 type Props = {
   post: PostType
   morePosts: PostType[]
