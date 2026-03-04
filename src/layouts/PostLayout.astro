@@ -16,7 +16,7 @@ const { title, date, excerpt, tags } = Astro.props;
 <BaseLayout title={title} description={excerpt}>
   <article class="py-8">
     <header class="mb-8">
-      <h1 class="text-3xl font-bold text-white">{title}</h1>
+      <h1 class="text-3xl font-bold text-fg-bright">{title}</h1>
       <div class="mt-4">
         <PostMeta date={date} tags={tags} />
       </div>

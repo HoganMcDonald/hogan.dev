@@ -13,11 +13,11 @@ const formatted = new Intl.DateTimeFormat('en-US', {
 }).format(date);
 ---
 
-<div class="flex flex-wrap items-center gap-3 text-sm text-gray-4">
+<div class="flex flex-wrap items-center gap-3 text-sm text-fg-muted">
   <time datetime={date.toISOString()}>{formatted}</time>
   {tags && tags.length > 0 && (
     <>
-      <span class="text-gray-3">/</span>
+      <span class="text-fg-muted">/</span>
       {tags.map((tag) => (
         <span class="text-purple">{tag}</span>
       ))}

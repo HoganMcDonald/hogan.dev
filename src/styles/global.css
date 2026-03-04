@@ -1,22 +1,180 @@
 @import "tailwindcss";
 
 @theme {
-  --color-gray-1: #171c28;
-  --color-gray-2: #2f3b54;
-  --color-gray-3: #6679a4;
-  --color-gray-4: #8695b7;
-  --color-off-white: #a2aabc;
-  --color-white: #d7dce2;
-  --color-gold: #ffcc66;
-  --color-blue: #5ccfe6;
-  --color-green: #bae67e;
-  --color-orange: #ffae57;
-  --color-yellow: #ffd580;
-  --color-purple: #c3a6ff;
-  --color-red: #ef6b73;
+  --color-bg: #1a1b26;
+  --color-bg-dark: #16161e;
+  --color-bg-surface: #24283b;
+  --color-fg: #a9b1d6;
+  --color-fg-bright: #c0caf5;
+  --color-fg-muted: #565f89;
+  --color-cyan: #7dcfff;
+  --color-purple: #bb9af7;
+  --color-blue: #7aa2f7;
+  --color-green: #9ece6a;
+  --color-orange: #ff9e64;
+  --color-red: #f7768e;
+  --color-yellow: #e0af68;
 }
 
 html {
-  background-color: var(--color-gray-1);
-  color: var(--color-white);
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+}
+
+/* --- CRT Scanlines --- */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.15) 2px,
+    rgba(0, 0, 0, 0.15) 4px
+  );
+}
+
+/* --- CRT Vignette --- */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9997;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 60%,
+    rgba(22, 22, 30, 0.5) 100%
+  );
+}
+
+/* --- Chromatic Aberration on headings --- */
+h1, h2, h3 {
+  text-shadow:
+    -0.5px 0 rgba(247, 118, 142, 0.06),
+    0.5px 0 rgba(125, 207, 255, 0.06);
+}
+
+/* --- Grain overlay --- */
+#grain {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.06;
+  mix-blend-mode: overlay;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* --- CRT Scan Bar (VHS tracking distortion) --- */
+#scan-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 9996;
+  pointer-events: none;
+  overflow: hidden;
+  animation: scanDrift 8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Bright horizontal band — the "hot" zone where the beam is strongest */
+#scan-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(200, 200, 255, 0.01) 20%,
+    rgba(255, 255, 255, 0.03) 49%,
+    rgba(255, 255, 255, 0.04) 50%,
+    rgba(255, 255, 255, 0.03) 51%,
+    rgba(200, 200, 255, 0.01) 80%,
+    transparent 100%
+  );
+}
+
+/* Thin bright scanline at center + RGB fringing offset */
+#scan-bar::after {
+  content: "";
+  position: absolute;
+  left: -4px;
+  right: -4px;
+  top: calc(50% - 1px);
+  height: 1px;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow:
+    -2px 0 0 rgba(247, 118, 142, 0.06),
+    2px 0 0 rgba(125, 207, 255, 0.06);
+}
+
+@keyframes scanDrift {
+  0% {
+    top: -60px;
+    height: 50px;
+    transform: translateX(0);
+  }
+  15% {
+    transform: translateX(0);
+  }
+  /* Occasional horizontal jitter */
+  16% {
+    transform: translateX(3px);
+  }
+  17% {
+    transform: translateX(-2px);
+  }
+  18% {
+    transform: translateX(0);
+  }
+  50% {
+    height: 70px;
+    transform: translateX(0);
+  }
+  72% {
+    transform: translateX(0);
+  }
+  73% {
+    transform: translateX(-4px);
+  }
+  73.5% {
+    transform: translateX(2px);
+  }
+  74% {
+    transform: translateX(0);
+  }
+  100% {
+    top: 100vh;
+    height: 50px;
+    transform: translateX(0);
+  }
+}
+
+/* --- Neon cursor --- */
+html {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='30' viewBox='0 0 32 40'%3E%3Cdefs%3E%3Cfilter id='g' x='-50%25' y='-50%25' width='200%25' height='200%25'%3E%3CfeGaussianBlur in='SourceGraphic' stdDeviation='1.2' result='blur'/%3E%3CfeMerge%3E%3CfeMergeNode in='blur'/%3E%3CfeMergeNode in='SourceGraphic'/%3E%3C/feMerge%3E%3C/filter%3E%3C/defs%3E%3Cpath d='M4 2 L4 30 L10.5 23 L17 36 L21 34 L14.5 21.5 L24 21.5 Z' fill='none' stroke='%237dcfff' stroke-width='1.8' stroke-linejoin='round' filter='url(%23g)'/%3E%3Cpath d='M4 2 L4 30 L10.5 23 L17 36 L21 34 L14.5 21.5 L24 21.5 Z' fill='none' stroke='rgba(255,255,255,0.5)' stroke-width='0.6' stroke-linejoin='round'/%3E%3C/svg%3E") 3 1, auto;
+}
+
+/* --- Hide effects for reduced motion --- */
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after,
+  #grain,
+  #scan-bar {
+    display: none;
+  }
+
+  html {
+    cursor: auto;
+  }
+}
+
+/* --- Restore default cursor on touch devices --- */
+@media (hover: none) {
+  html {
+    cursor: auto;
+  }
 }

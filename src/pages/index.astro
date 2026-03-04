@@ -10,7 +10,7 @@ const posts = (await getCollection('posts'))
 
 <BaseLayout title="hogan.dev">
   <section class="py-8">
-    <div class="divide-y divide-gray-2">
+    <div class="divide-y divide-bg-surface">
       {posts.map((post) => (
         <PostCard
           title={post.data.title}
