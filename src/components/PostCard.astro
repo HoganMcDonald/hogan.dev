@@ -15,9 +15,9 @@ const { title, date, excerpt, slug, tags } = Astro.props;
 <article class="group">
   <a href={`/posts/${slug}`} class="block py-6">
     <PostMeta date={date} tags={tags} />
-    <h2 class="mt-2 text-xl font-semibold text-white group-hover:text-gold transition-colors">
+    <h2 class="mt-2 text-xl font-semibold text-fg-bright group-hover:text-yellow transition-colors">
       {title}
     </h2>
-    <p class="mt-2 text-off-white leading-relaxed">{excerpt}</p>
+    <p class="mt-2 text-fg leading-relaxed">{excerpt}</p>
   </a>
 </article>
