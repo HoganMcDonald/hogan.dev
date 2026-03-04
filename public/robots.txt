@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://hogan.dev/sitemap-index.xml
