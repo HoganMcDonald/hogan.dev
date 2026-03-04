@@ -1,0 +1,74 @@
+---
+---
+
+<div class="prose">
+  <slot />
+</div>
+
+<style>
+  @reference "../styles/global.css";
+
+  .prose {
+    @apply text-off-white leading-relaxed;
+  }
+
+  .prose :global(h1) {
+    @apply text-3xl font-bold text-white mt-10 mb-4;
+  }
+
+  .prose :global(h2) {
+    @apply text-2xl font-bold text-white mt-10 mb-4;
+  }
+
+  .prose :global(h3) {
+    @apply text-xl font-semibold text-white mt-8 mb-3;
+  }
+
+  .prose :global(p) {
+    @apply my-4;
+  }
+
+  .prose :global(a) {
+    @apply text-blue underline underline-offset-2 hover:text-gold transition-colors;
+  }
+
+  .prose :global(strong) {
+    @apply text-white font-semibold;
+  }
+
+  .prose :global(ul) {
+    @apply my-4 ml-6 list-disc;
+  }
+
+  .prose :global(ol) {
+    @apply my-4 ml-6 list-decimal;
+  }
+
+  .prose :global(li) {
+    @apply my-1;
+  }
+
+  .prose :global(blockquote) {
+    @apply border-l-2 border-gray-3 pl-4 my-4 italic text-gray-4;
+  }
+
+  .prose :global(code) {
+    @apply text-green text-sm px-1.5 py-0.5 bg-gray-2 rounded;
+  }
+
+  .prose :global(pre) {
+    @apply my-6 rounded-lg p-4 overflow-x-auto;
+  }
+
+  .prose :global(pre code) {
+    @apply bg-transparent p-0 text-inherit;
+  }
+
+  .prose :global(hr) {
+    @apply my-8 border-gray-2;
+  }
+
+  .prose :global(img) {
+    @apply my-6 rounded-lg;
+  }
+</style>
