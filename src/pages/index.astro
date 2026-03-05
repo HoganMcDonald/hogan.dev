@@ -9,7 +9,27 @@ const posts = (await getCollection('posts'))
 ---
 
 <BaseLayout title="hogan.dev">
-  <section class="py-8">
+  <section class="flex flex-col justify-center" style="min-height: calc(100svh - 12rem);">
+    <div class="space-y-6">
+      <h1 class="text-4xl font-bold text-fg-bright leading-tight">
+        Hogan McDonald
+      </h1>
+      <p class="text-lg text-fg leading-relaxed max-w-lg">
+        Senior software engineer building for the web.
+        I care about developer tooling, clean abstractions, and shipping things that work.
+      </p>
+      <div class="flex gap-4 text-sm">
+        <a href="https://github.com/hoganmcdonald" class="text-fg-muted hover:text-cyan transition-colors">GitHub</a>
+        <span class="text-fg-muted">/</span>
+        <a href="https://linkedin.com/in/hogan-mcdonald" class="text-fg-muted hover:text-cyan transition-colors">LinkedIn</a>
+        <span class="text-fg-muted">/</span>
+        <a href="/uses" class="text-fg-muted hover:text-cyan transition-colors">Uses</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="posts" class="pb-8">
+    <h2 class="text-lg font-bold text-fg-muted mb-4">Writing</h2>
     <div class="divide-y divide-bg-surface">
       {posts.map((post) => (
         <PostCard
