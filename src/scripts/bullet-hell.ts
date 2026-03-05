@@ -34,12 +34,14 @@ interface Bullet {
   homing: boolean;
   exploding: boolean;
   target?: Enemy;
-  // mine fields
   isMine: boolean;
   fuseTimer: number;
-  // laser fields
   isLaser: boolean;
   laserLife: number;
+  isLaserWarning: boolean;
+  warningTimer: number;
+  warningX: number;
+  warningSourceY: number;
 }
 
 interface Enemy {
@@ -62,6 +64,9 @@ interface Enemy {
   attackType: EnemyAttack;
   shootTimer: number;
   shootInterval: number;
+  isBoss: boolean;
+  bossAttackIndex: number;
+  bossAttackTimer: number;
 }
 
 interface Particle {
@@ -99,6 +104,7 @@ interface GameState {
   wordPool: string[];
   wordIndex: number;
   shopSelection: number;
+  bossActive: boolean;
 }
 
 const COLORS = {
@@ -123,6 +129,10 @@ const BULLET_DEFAULTS = {
   fuseTimer: 0,
   isLaser: false,
   laserLife: 0,
+  isLaserWarning: false,
+  warningTimer: 0,
+  warningX: 0,
+  warningSourceY: 0,
 };
 
 export function initGame(button: HTMLElement) {
@@ -206,6 +216,9 @@ function startGame() {
   const enemies: Enemy[] = [];
   const particles: Particle[] = [];
 
+  // Track how many times each upgrade has been purchased for price scaling
+  const purchaseCounts: Record<string, number> = {};
+
   const state: GameState = {
     phase: 'waveIntro',
     score: 0,
@@ -220,6 +233,7 @@ function startGame() {
     wordPool: words,
     wordIndex: 0,
     shopSelection: 0,
+    bossActive: false,
   };
 
   function enemiesShootThisWave(): boolean {
@@ -227,11 +241,9 @@ function startGame() {
   }
 
   function enemyHpBonus(): number {
-    return Math.floor(state.wave / 5);
+    return Math.floor(state.wave / 2);
   }
 
-  // Determine which attack types are available at this wave
-  // Wave 3: aimed, Wave 6: radial, Wave 9: laser, Wave 12: mine
   function availableAttacks(): EnemyAttack[] {
     const attacks: EnemyAttack[] = ['aimed'];
     if (state.wave >= 6) attacks.push('radial');
@@ -245,8 +257,19 @@ function startGame() {
     return attacks[Math.floor(Math.random() * attacks.length)];
   }
 
+  function isBossWave(): boolean {
+    return state.wave % 10 === 0;
+  }
+
   function pct(n: number): string {
     return `${Math.round(n * 100)}%`;
+  }
+
+  // Shop prices scale: base cost + 1 per purchase + 1 per 3 waves
+  function shopCost(basePrice: number, itemId: string): number {
+    const bought = purchaseCounts[itemId] || 0;
+    const waveInflation = Math.floor(state.wave / 3);
+    return basePrice + bought + waveInflation;
   }
 
   function buildShopItems(): ShopItem[] {
@@ -255,61 +278,67 @@ function startGame() {
         id: 'hp_up',
         name: '+1 Max HP',
         desc: 'Increase maximum health by 1',
-        cost: 3,
+        cost: shopCost(3, 'hp_up'),
         available: () => true,
         apply: () => {
           player.maxHp++;
           player.hp++;
+          purchaseCounts['hp_up'] = (purchaseCounts['hp_up'] || 0) + 1;
         },
       },
       {
         id: 'heal',
         name: 'Full Heal',
         desc: 'Restore all health',
-        cost: 2,
+        cost: shopCost(2, 'heal'),
         available: () => player.hp < player.maxHp,
         apply: () => {
           player.hp = player.maxHp;
+          purchaseCounts['heal'] = (purchaseCounts['heal'] || 0) + 1;
         },
       },
       {
         id: 'fire_rate',
         name: 'Faster Firing',
         desc: `Reduce shot cooldown (current: ${Math.round(player.shootCooldown * 1000)}ms)`,
-        cost: 3,
+        cost: shopCost(3, 'fire_rate'),
         available: () => player.shootCooldown > 0.04,
         apply: () => {
           player.shootCooldown = Math.max(0.04, player.shootCooldown - 0.02);
+          purchaseCounts['fire_rate'] = (purchaseCounts['fire_rate'] || 0) + 1;
         },
       },
       {
         id: 'max_bullets',
         name: '+1 Bullet Count',
         desc: `More bullets on screen (current: ${player.maxBullets})`,
-        cost: 2,
+        cost: shopCost(2, 'max_bullets'),
         available: () => player.maxBullets < 12,
         apply: () => {
           player.maxBullets++;
+          purchaseCounts['max_bullets'] = (purchaseCounts['max_bullets'] || 0) + 1;
         },
       },
       {
         id: 'gun_exploding',
         name: 'Exploding Rounds',
         desc: `+15% chance to explode on hit (current: ${pct(player.explodingChance)})`,
-        cost: 3,
+        cost: shopCost(3, 'gun_exploding'),
         available: () => player.explodingChance < 1,
         apply: () => {
           player.explodingChance = Math.min(1, player.explodingChance + 0.15);
+          purchaseCounts['gun_exploding'] = (purchaseCounts['gun_exploding'] || 0) + 1;
         },
       },
       {
         id: 'gun_homing',
         name: 'Homing Rounds',
         desc: `+15% chance to track enemies (current: ${pct(player.homingChance)})`,
-        cost: 3,
+        cost: shopCost(3, 'gun_homing'),
         available: () => player.homingChance < 1,
         apply: () => {
           player.homingChance = Math.min(1, player.homingChance + 0.15);
+          purchaseCounts['gun_homing'] = (purchaseCounts['gun_homing'] || 0) + 1;
         },
       },
     ];
@@ -334,10 +363,17 @@ function startGame() {
   function getEnemyStats(word: string): { hp: number; speed: number } {
     const len = word.length;
     const bonus = enemyHpBonus();
-    if (len <= 4) return { hp: 1 + bonus, speed: 100 + Math.random() * 40 };
-    if (len <= 8) return { hp: 2 + bonus, speed: 70 + Math.random() * 30 };
-    return { hp: 3 + bonus, speed: 50 + Math.random() * 20 };
+    const speedBonus = state.wave * 4;
+    if (len <= 4) return { hp: 1 + bonus, speed: 100 + speedBonus + Math.random() * 40 };
+    if (len <= 8) return { hp: 2 + bonus, speed: 70 + speedBonus + Math.random() * 30 };
+    return { hp: 3 + bonus, speed: 50 + speedBonus + Math.random() * 20 };
   }
+
+  const ENEMY_DEFAULTS = {
+    isBoss: false,
+    bossAttackIndex: 0,
+    bossAttackTimer: 0,
+  };
 
   function spawnEnemy() {
     const word = nextWord();
@@ -349,7 +385,8 @@ function startGame() {
     const ew = measured.width + 12;
     const eh = 24;
     const x = Math.random() * (W - ew) + ew / 2;
-    const canShoot = enemiesShootThisWave() && Math.random() < 0.5;
+    const shootChance = Math.min(0.9, 0.3 + state.wave * 0.05);
+    const canShoot = enemiesShootThisWave() && Math.random() < shootChance;
     enemies.push({
       x,
       y: -eh,
@@ -370,7 +407,45 @@ function startGame() {
       attackType: canShoot ? pickAttack() : 'aimed',
       shootTimer: 1 + Math.random() * 2,
       shootInterval: Math.max(1.5, 3 - state.wave * 0.1),
+      ...ENEMY_DEFAULTS,
     });
+  }
+
+  function spawnBoss() {
+    state.bossActive = true;
+    const bossHp = 30 + state.wave * 5;
+    const bossWord = '< BOSS >';
+    ctx.font = 'bold 24px monospace';
+    const measured = ctx.measureText(bossWord);
+    const bw = measured.width + 40;
+    const bh = 40;
+    enemies.push({
+      x: W / 2,
+      y: -bh,
+      vx: 0,
+      vy: 40,
+      w: bw,
+      h: bh,
+      word: bossWord,
+      hp: bossHp,
+      maxHp: bossHp,
+      alive: true,
+      hitFlash: 0,
+      pattern: 'sine',
+      phaseOffset: 0,
+      baseX: W / 2,
+      time: 0,
+      canShoot: true,
+      attackType: 'aimed',
+      shootTimer: 1,
+      shootInterval: 0.8,
+      isBoss: true,
+      bossAttackIndex: 0,
+      bossAttackTimer: 0,
+    });
+    // Boss counts as the remaining enemies for the wave
+    state.enemiesRemaining = 1;
+    state.enemiesSpawned = state.enemiesPerWave; // stop normal spawning
   }
 
   // --- Enemy attack functions ---
@@ -394,6 +469,29 @@ function startGame() {
     });
   }
 
+  function fireAimedBurst(e: Enemy) {
+    const dx = player.x - e.x;
+    const dy = player.y - e.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist === 0) return;
+    const speed = 200 + state.wave * 5;
+    const baseAngle = Math.atan2(dy, dx);
+    for (let i = -2; i <= 2; i++) {
+      const angle = baseAngle + i * 0.15;
+      bullets.push({
+        x: e.x,
+        y: e.y + e.h / 2,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        w: 6,
+        h: 6,
+        alive: true,
+        owner: 'enemy',
+        ...BULLET_DEFAULTS,
+      });
+    }
+  }
+
   function fireRadial(e: Enemy) {
     const count = 8 + Math.floor(state.wave / 3);
     const speed = 140 + state.wave * 3;
@@ -413,8 +511,8 @@ function startGame() {
     }
   }
 
-  function fireLaser(e: Enemy) {
-    // Laser: a tall thin beam that spawns below the enemy, aimed at player's current x
+  function fireLaserWarning(e: Enemy) {
+    // Spawn a warning indicator that blinks at the target x, then becomes a real laser
     const lx = player.x;
     const ly = e.y + e.h / 2;
     bullets.push({
@@ -422,26 +520,44 @@ function startGame() {
       y: ly,
       vx: 0,
       vy: 0,
-      w: 12,
+      w: 4,
       h: H - ly,
       alive: true,
       owner: 'enemy',
       ...BULLET_DEFAULTS,
-      isLaser: true,
-      laserLife: 0.4,
+      isLaserWarning: true,
+      warningTimer: 0.8,
+      warningX: lx,
+      warningSourceY: ly,
     });
-    // Warning particles along beam
-    for (let py = ly; py < H; py += 40) {
+  }
+
+  function fireLaserBeam(x: number, sourceY: number) {
+    bullets.push({
+      x,
+      y: sourceY,
+      vx: 0,
+      vy: 0,
+      w: 14,
+      h: H - sourceY,
+      alive: true,
+      owner: 'enemy',
+      ...BULLET_DEFAULTS,
+      isLaser: true,
+      laserLife: 0.35,
+    });
+    // Impact particles
+    for (let py = sourceY; py < H; py += 30) {
       particles.push({
-        x: lx + (Math.random() - 0.5) * 10,
+        x: x + (Math.random() - 0.5) * 10,
         y: py,
-        vx: (Math.random() - 0.5) * 60,
-        vy: (Math.random() - 0.5) * 30,
-        life: 0.3,
-        maxLife: 0.3,
-        char: '|',
+        vx: (Math.random() - 0.5) * 80,
+        vy: (Math.random() - 0.5) * 40,
+        life: 0.25,
+        maxLife: 0.25,
+        char: '!',
         color: COLORS.red,
-        size: 16,
+        size: 14,
       });
     }
   }
@@ -466,8 +582,44 @@ function startGame() {
     switch (e.attackType) {
       case 'aimed': fireAimed(e); break;
       case 'radial': fireRadial(e); break;
-      case 'laser': fireLaser(e); break;
+      case 'laser': fireLaserWarning(e); break;
       case 'mine': dropMine(e); break;
+    }
+  }
+
+  // Boss cycles through attack patterns
+  const BOSS_ATTACKS: EnemyAttack[] = ['aimed', 'radial', 'laser', 'mine'];
+  function bossShoot(e: Enemy) {
+    const pattern = BOSS_ATTACKS[e.bossAttackIndex % BOSS_ATTACKS.length];
+    switch (pattern) {
+      case 'aimed': fireAimedBurst(e); break;
+      case 'radial': fireRadial(e); break;
+      case 'laser':
+        fireLaserWarning(e);
+        // Boss fires 3 lasers spread out
+        const offsets = [-100, 100];
+        for (const ox of offsets) {
+          const lx = Math.max(20, Math.min(W - 20, player.x + ox));
+          const ly = e.y + e.h / 2;
+          bullets.push({
+            x: lx, y: ly, vx: 0, vy: 0, w: 4, h: H - ly,
+            alive: true, owner: 'enemy', ...BULLET_DEFAULTS,
+            isLaserWarning: true, warningTimer: 0.8, warningX: lx, warningSourceY: ly,
+          });
+        }
+        break;
+      case 'mine':
+        dropMine(e);
+        // Boss drops multiple mines
+        for (let i = 0; i < 3; i++) {
+          const mx = e.x + (Math.random() - 0.5) * 200;
+          bullets.push({
+            x: mx, y: e.y + e.h / 2, vx: 0, vy: 0, w: 14, h: 14,
+            alive: true, owner: 'enemy', ...BULLET_DEFAULTS,
+            isMine: true, fuseTimer: 2 + Math.random() * 2,
+          });
+        }
+        break;
     }
   }
 
@@ -497,6 +649,11 @@ function startGame() {
           state.enemiesRemaining--;
           state.score += e.word.length * 10;
           state.points++;
+          if (e.isBoss) {
+            state.bossActive = false;
+            state.points += 10;
+            spawnBossDeathEffect(e.x, e.y);
+          }
           spawnParticles(e.x, e.y, e.word);
         }
       }
@@ -519,6 +676,26 @@ function startGame() {
     }
   }
 
+  function spawnBossDeathEffect(x: number, y: number) {
+    for (let i = 0; i < 40; i++) {
+      const angle = (Math.PI * 2 * i) / 40;
+      const speed = 100 + Math.random() * 200;
+      const chars = ['*', '#', '!', '@', '$', '%'];
+      const colors = [COLORS.cyan, COLORS.purple, COLORS.orange, COLORS.yellow, COLORS.red];
+      particles.push({
+        x: x + (Math.random() - 0.5) * 60,
+        y: y + (Math.random() - 0.5) * 40,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 1 + Math.random() * 0.5,
+        maxLife: 1.5,
+        char: chars[Math.floor(Math.random() * chars.length)],
+        color: colors[Math.floor(Math.random() * colors.length)],
+        size: 10 + Math.random() * 16,
+      });
+    }
+  }
+
   function spawnParticles(x: number, y: number, word: string) {
     for (const char of word) {
       particles.push({
@@ -536,12 +713,13 @@ function startGame() {
 
   function startWave() {
     state.phase = 'waveIntro';
-    state.waveTimer = 2;
+    state.waveTimer = isBossWave() ? 3 : 2;
     state.enemiesSpawned = 0;
-    state.enemiesPerWave = 6 + state.wave * 2;
+    state.enemiesPerWave = isBossWave() ? 0 : 6 + state.wave * 2;
     state.enemiesRemaining = state.enemiesPerWave;
     state.spawnInterval = Math.max(0.3, 1.2 - state.wave * 0.08);
     state.spawnTimer = 0;
+    state.bossActive = false;
   }
 
   function enterShop() {
@@ -582,7 +760,6 @@ function startGame() {
     if (now - player.lastShot < player.shootCooldown * 1000) return;
     player.lastShot = now;
 
-    // Roll homing and exploding independently — both can be true
     const isHoming = Math.random() < player.homingChance;
     const isExploding = Math.random() < player.explodingChance;
 
@@ -606,6 +783,10 @@ function startGame() {
       fuseTimer: 0,
       isLaser: false,
       laserLife: 0,
+      isLaserWarning: false,
+      warningTimer: 0,
+      warningX: 0,
+      warningSourceY: 0,
     });
   }
 
@@ -639,6 +820,9 @@ function startGame() {
       state.waveTimer -= dt;
       if (state.waveTimer <= 0) {
         state.phase = 'playing';
+        if (isBossWave()) {
+          spawnBoss();
+        }
       }
     }
 
@@ -668,8 +852,8 @@ function startGame() {
       firePlayerBullet(now);
     }
 
-    // Spawn enemies
-    if (state.phase === 'playing' && state.enemiesSpawned < state.enemiesPerWave) {
+    // Spawn enemies (not during boss wave — boss spawns at wave start)
+    if (state.phase === 'playing' && !state.bossActive && state.enemiesSpawned < state.enemiesPerWave) {
       state.spawnTimer -= dt;
       if (state.spawnTimer <= 0) {
         spawnEnemy();
@@ -682,11 +866,21 @@ function startGame() {
     for (const b of bullets) {
       if (!b.alive) continue;
 
+      // Laser warning: blink, then fire real laser
+      if (b.isLaserWarning) {
+        b.warningTimer -= dt;
+        if (b.warningTimer <= 0) {
+          b.alive = false;
+          fireLaserBeam(b.warningX, b.warningSourceY);
+        }
+        continue;
+      }
+
       // Laser lifetime
       if (b.isLaser) {
         b.laserLife -= dt;
         if (b.laserLife <= 0) b.alive = false;
-        continue; // lasers don't move
+        continue;
       }
 
       // Mine fuse
@@ -695,7 +889,6 @@ function startGame() {
         if (b.fuseTimer <= 0) {
           b.alive = false;
           spawnMineExplosion(b.x, b.y);
-          // Damage player if nearby
           if (
             now > player.invincibleUntil &&
             Math.abs(b.x - player.x) < 60 &&
@@ -706,7 +899,7 @@ function startGame() {
             if (player.hp <= 0) state.phase = 'gameOver';
           }
         }
-        continue; // mines don't move
+        continue;
       }
 
       // Homing logic (player bullets only)
@@ -738,32 +931,49 @@ function startGame() {
       e.time += dt;
       e.hitFlash = Math.max(0, e.hitFlash - dt * 5);
 
-      switch (e.pattern) {
-        case 'straight':
+      if (e.isBoss) {
+        // Boss: move to y=80 then patrol horizontally
+        if (e.y < 80) {
           e.y += e.vy * dt;
-          break;
-        case 'sine':
-          e.y += e.vy * dt;
-          e.x = e.baseX + Math.sin(e.time * 2 + e.phaseOffset) * 80;
-          break;
-        case 'zigzag':
-          e.y += e.vy * dt;
-          e.x = e.baseX + ((Math.floor(e.time * 2) % 2 === 0 ? 1 : -1) * 60 * (e.time % 0.5)) / 0.5;
-          break;
-      }
-
-      // Enemy shooting
-      if (e.canShoot && e.y > 0 && e.y < H * 0.7) {
-        e.shootTimer -= dt;
-        if (e.shootTimer <= 0) {
-          enemyShoot(e);
-          e.shootTimer = e.shootInterval;
+        } else {
+          e.y = 80;
+          e.x = W / 2 + Math.sin(e.time * 0.8) * (W * 0.3);
         }
-      }
+        // Boss attack cycle: every 2 seconds, switch pattern and fire
+        e.bossAttackTimer += dt;
+        if (e.bossAttackTimer >= 1.5) {
+          bossShoot(e);
+          e.bossAttackTimer = 0;
+          e.bossAttackIndex++;
+        }
+      } else {
+        switch (e.pattern) {
+          case 'straight':
+            e.y += e.vy * dt;
+            break;
+          case 'sine':
+            e.y += e.vy * dt;
+            e.x = e.baseX + Math.sin(e.time * 2 + e.phaseOffset) * 80;
+            break;
+          case 'zigzag':
+            e.y += e.vy * dt;
+            e.x = e.baseX + ((Math.floor(e.time * 2) % 2 === 0 ? 1 : -1) * 60 * (e.time % 0.5)) / 0.5;
+            break;
+        }
 
-      if (e.y > H + 50) {
-        e.alive = false;
-        state.enemiesRemaining--;
+        // Enemy shooting
+        if (e.canShoot && e.y > 0 && e.y < H * 0.7) {
+          e.shootTimer -= dt;
+          if (e.shootTimer <= 0) {
+            enemyShoot(e);
+            e.shootTimer = e.shootInterval;
+          }
+        }
+
+        if (e.y > H + 50) {
+          e.alive = false;
+          state.enemiesRemaining--;
+        }
       }
 
       // Collision with player
@@ -781,18 +991,14 @@ function startGame() {
     // Enemy bullet vs player
     for (const b of bullets) {
       if (!b.alive || b.owner !== 'enemy') continue;
-      // Mines don't collide directly, they explode on fuse
-      if (b.isMine) continue;
-      // Laser uses its full height as hitbox
-      const bw = b.isLaser ? b.w : b.w;
-      const bh = b.isLaser ? b.h : b.h;
+      if (b.isMine || b.isLaserWarning) continue;
       const by = b.isLaser ? b.y + b.h / 2 : b.y;
       if (
         now > player.invincibleUntil &&
-        Math.abs(b.x - player.x) < (bw + player.w) / 2 &&
-        Math.abs(by - player.y) < (bh + player.h) / 2
+        Math.abs(b.x - player.x) < (b.w + player.w) / 2 &&
+        Math.abs(by - player.y) < (b.h + player.h) / 2
       ) {
-        if (!b.isLaser) b.alive = false; // lasers persist through hits
+        if (!b.isLaser) b.alive = false;
         player.hp--;
         player.invincibleUntil = now + 1500;
         if (player.hp <= 0) state.phase = 'gameOver';
@@ -819,6 +1025,11 @@ function startGame() {
             state.enemiesRemaining--;
             state.score += e.word.length * 10;
             state.points++;
+            if (e.isBoss) {
+              state.bossActive = false;
+              state.points += 10;
+              spawnBossDeathEffect(e.x, e.y);
+            }
             spawnParticles(e.x, e.y, e.word);
           }
           break;
@@ -849,7 +1060,7 @@ function startGame() {
     if (
       state.phase === 'playing' &&
       state.enemiesRemaining <= 0 &&
-      state.enemiesSpawned >= state.enemiesPerWave
+      (state.enemiesSpawned >= state.enemiesPerWave || isBossWave())
     ) {
       state.wave++;
       enterShop();
@@ -888,12 +1099,11 @@ function startGame() {
     ctx.restore();
   }
 
-  function drawBullets() {
+  function drawBullets(now: number) {
     for (const b of bullets) {
       ctx.save();
 
       if (b.owner === 'player') {
-        // Combo bullet: homing+exploding = yellow-green
         if (b.homing && b.exploding) {
           ctx.shadowColor = COLORS.yellow;
           ctx.shadowBlur = 12;
@@ -912,17 +1122,31 @@ function startGame() {
           ctx.fillStyle = COLORS.cyan;
         }
         ctx.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+      } else if (b.isLaserWarning) {
+        // Blinking warning line
+        const blink = Math.sin(now * 0.02) > 0;
+        if (blink) {
+          ctx.strokeStyle = `rgba(247,118,142,0.5)`;
+          ctx.lineWidth = 2;
+          ctx.setLineDash([8, 8]);
+          ctx.beginPath();
+          ctx.moveTo(b.warningX, b.warningSourceY);
+          ctx.lineTo(b.warningX, H);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        // Crosshair at target
+        ctx.fillStyle = `rgba(247,118,142,${blink ? 0.6 : 0.2})`;
+        ctx.fillRect(b.warningX - 6, b.warningSourceY - 1, 12, 2);
+        ctx.fillRect(b.warningX - 1, b.warningSourceY - 6, 2, 12);
       } else if (b.isLaser) {
-        // Laser beam
         ctx.shadowColor = COLORS.red;
         ctx.shadowBlur = 20;
         ctx.fillStyle = `rgba(247,118,142,${0.4 + Math.random() * 0.3})`;
         ctx.fillRect(b.x - b.w / 2, b.y, b.w, b.h);
-        // Bright core
         ctx.fillStyle = `rgba(255,255,255,${0.3 + Math.random() * 0.2})`;
         ctx.fillRect(b.x - 2, b.y, 4, b.h);
       } else if (b.isMine) {
-        // Mine: pulsing diamond
         const pulse = 1 + Math.sin(b.fuseTimer * 6) * 0.2;
         ctx.shadowColor = b.fuseTimer < 1 ? COLORS.red : COLORS.yellow;
         ctx.shadowBlur = b.fuseTimer < 1 ? 16 : 8;
@@ -932,7 +1156,6 @@ function startGame() {
         const s = (b.w / 2) * pulse;
         ctx.fillRect(-s, -s, s * 2, s * 2);
       } else {
-        // Normal enemy bullet
         ctx.shadowColor = COLORS.red;
         ctx.shadowBlur = 8;
         ctx.fillStyle = COLORS.red;
@@ -948,12 +1171,48 @@ function startGame() {
   function drawEnemies() {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '16px monospace';
+
     for (const e of enemies) {
       const flash = e.hitFlash > 0;
       ctx.save();
 
-      // Color based on attack type when shooting
+      if (e.isBoss) {
+        // Boss rendering: larger, special glow
+        ctx.font = 'bold 24px monospace';
+        const glowColor = COLORS.red;
+        ctx.shadowColor = flash ? '#fff' : glowColor;
+        ctx.shadowBlur = flash ? 30 : 16;
+
+        // Background
+        ctx.fillStyle = flash ? `rgba(255,255,255,0.3)` : `rgba(247,118,142,0.2)`;
+        ctx.fillRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
+        ctx.strokeStyle = flash ? '#fff' : glowColor;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
+
+        // Word
+        ctx.fillStyle = flash ? '#fff' : COLORS.fgBright;
+        ctx.fillText(e.word, e.x, e.y);
+
+        // HP bar (always shown for boss)
+        const barW = e.w;
+        const barH = 6;
+        const barY = e.y - e.h / 2 - 12;
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(e.x - barW / 2, barY, barW, barH);
+        const hpRatio = e.hp / e.maxHp;
+        ctx.fillStyle = hpRatio > 0.5 ? COLORS.red : hpRatio > 0.25 ? COLORS.orange : COLORS.yellow;
+        ctx.fillRect(e.x - barW / 2, barY, barW * hpRatio, barH);
+        ctx.strokeStyle = COLORS.fgMuted;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(e.x - barW / 2, barY, barW, barH);
+
+        ctx.restore();
+        continue;
+      }
+
+      // Normal enemy rendering
+      ctx.font = '16px monospace';
       let glowColor = COLORS.purple;
       let bgColor = `rgba(187,154,247,0.3)`;
       if (e.canShoot) {
@@ -1002,7 +1261,6 @@ function startGame() {
         ctx.fillRect(e.x - barW / 2, barY, barW * (e.hp / e.maxHp), barH);
       }
 
-      // Attack type indicator for shooting enemies
       if (e.canShoot) {
         ctx.font = '9px monospace';
         ctx.fillStyle = glowColor;
@@ -1010,7 +1268,6 @@ function startGame() {
           aimed: 'AIM', radial: 'RAD', laser: 'LAS', mine: 'MIN',
         };
         ctx.fillText(labels[e.attackType], e.x, e.y + e.h / 2 + 8);
-        ctx.font = '16px monospace';
       }
 
       ctx.restore();
@@ -1144,7 +1401,8 @@ function startGame() {
     ctx.textAlign = 'center';
     ctx.font = 'bold 16px monospace';
     ctx.fillStyle = selected ? COLORS.green : COLORS.fgMuted;
-    ctx.fillText(`>> WAVE ${state.wave} >>`, cx, contY + 22);
+    const nextLabel = isBossWave() ? `>> BOSS WAVE ${state.wave} >>` : `>> WAVE ${state.wave} >>`;
+    ctx.fillText(nextLabel, cx, contY + 22);
 
     ctx.font = '12px monospace';
     ctx.fillStyle = COLORS.fgMuted;
@@ -1153,6 +1411,7 @@ function startGame() {
   }
 
   function waveIntroWarning(): string | null {
+    if (isBossWave()) return 'BOSS FIGHT!';
     const w = state.wave;
     if (w === 3) return 'ENEMIES ARE SHOOTING BACK!';
     if (w === 6) return 'NEW THREAT: RADIAL SHOTS';
@@ -1164,18 +1423,25 @@ function startGame() {
   function drawWaveIntro() {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.shadowColor = COLORS.cyan;
-    ctx.shadowBlur = 20;
-    ctx.font = 'bold 32px monospace';
-    ctx.fillStyle = COLORS.cyan;
-    ctx.fillText(`WAVE ${state.wave}`, W / 2, H / 2 - 40);
+
+    const isBoss = isBossWave();
+    ctx.shadowColor = isBoss ? COLORS.red : COLORS.cyan;
+    ctx.shadowBlur = isBoss ? 30 : 20;
+    ctx.font = `bold ${isBoss ? 40 : 32}px monospace`;
+    ctx.fillStyle = isBoss ? COLORS.red : COLORS.cyan;
+    ctx.fillText(isBoss ? `BOSS - WAVE ${state.wave}` : `WAVE ${state.wave}`, W / 2, H / 2 - 40);
     ctx.shadowBlur = 0;
 
     const warning = waveIntroWarning();
-    if (warning) {
+    if (warning && !isBoss) {
       ctx.font = '14px monospace';
       ctx.fillStyle = COLORS.orange;
       ctx.fillText(warning, W / 2, H / 2);
+    }
+    if (isBoss) {
+      ctx.font = '14px monospace';
+      ctx.fillStyle = COLORS.orange;
+      ctx.fillText('PREPARE YOURSELF', W / 2, H / 2);
     }
 
     ctx.font = '14px monospace';
@@ -1214,7 +1480,7 @@ function startGame() {
     }
 
     drawPlayer(now);
-    drawBullets();
+    drawBullets(now);
     drawEnemies();
     drawParticles();
     drawHUD();
