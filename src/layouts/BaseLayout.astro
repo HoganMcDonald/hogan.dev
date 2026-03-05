@@ -56,13 +56,42 @@ const siteTitle = title === 'hogan.dev' ? title : `${title} | hogan.dev`;
   </head>
   <body class="flex min-h-screen flex-col font-mono antialiased">
     <Header />
-    <main class="mx-auto w-full max-w-2xl flex-1 px-6">
-      <slot />
-    </main>
-    <Footer />
+    <div class="page-content flex min-h-screen flex-col">
+      <main class="mx-auto w-full max-w-2xl flex-1 px-6">
+        <slot />
+      </main>
+      <Footer />
+    </div>
 
     <!-- Fixed overlays -->
     <div id="scan-bar"></div>
     <div id="grain"></div>
+
+    <!-- Chromatic aberration SVG filter -->
+    <svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true"
+         style="position:absolute;width:0;height:0;overflow:hidden">
+      <filter id="chromatic" color-interpolation-filters="sRGB"
+              x="-2%" y="-2%" width="104%" height="104%">
+        <feColorMatrix type="matrix"
+          values="1 0 0 0 0
+                  0 0 0 0 0
+                  0 0 0 0 0
+                  0 0 0 1 0" result="red"/>
+        <feOffset in="red" dx="1.5" dy="0" result="red-shifted"/>
+        <feColorMatrix in="SourceGraphic" type="matrix"
+          values="0 0 0 0 0
+                  0 1 0 0 0
+                  0 0 0 0 0
+                  0 0 0 1 0" result="green"/>
+        <feColorMatrix in="SourceGraphic" type="matrix"
+          values="0 0 0 0 0
+                  0 0 0 0 0
+                  0 0 1 0 0
+                  0 0 0 1 0" result="blue"/>
+        <feOffset in="blue" dx="-1.5" dy="0" result="blue-shifted"/>
+        <feBlend mode="screen" in="red-shifted" in2="green" result="rg"/>
+        <feBlend mode="screen" in="rg" in2="blue-shifted"/>
+      </filter>
+    </svg>
   </body>
 </html>
