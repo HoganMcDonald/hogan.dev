@@ -58,6 +58,10 @@
 
   .prose :global(pre) {
     @apply my-6 rounded-lg p-4 overflow-x-auto;
+    background-color: color-mix(in srgb, var(--color-blue), transparent 92%) !important;
+    box-shadow:
+      0 0 12px color-mix(in srgb, var(--color-blue), transparent 92%),
+      0 0 30px color-mix(in srgb, var(--color-blue), transparent 92%);
   }
 
   .prose :global(pre code) {
