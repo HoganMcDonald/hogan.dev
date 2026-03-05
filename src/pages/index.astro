@@ -28,6 +28,15 @@ const posts = (await getCollection('posts'))
     </div>
   </section>
 
+  <div class="flex justify-center py-8">
+    <button
+      id="start-game"
+      class="font-mono text-cyan border border-cyan px-6 py-3 text-sm tracking-wider uppercase cursor-pointer bg-transparent hover:bg-cyan/10 transition-colors"
+    >
+      Start Game
+    </button>
+  </div>
+
   <section id="posts" class="pb-8">
     <h2 class="text-lg font-bold text-fg-muted mb-4">Writing</h2>
     <div class="divide-y divide-bg-surface">
@@ -43,3 +52,22 @@ const posts = (await getCollection('posts'))
     </div>
   </section>
 </BaseLayout>
+
+<style>
+  #start-game {
+    animation: glow-pulse 2s ease-in-out infinite;
+  }
+  @keyframes glow-pulse {
+    0%, 100% { box-shadow: 0 0 15px rgba(125, 207, 255, 0.3), 0 0 30px rgba(125, 207, 255, 0.1); }
+    50% { box-shadow: 0 0 20px rgba(125, 207, 255, 0.5), 0 0 40px rgba(125, 207, 255, 0.2); }
+  }
+</style>
+
+<script>
+  import { initGame } from '../scripts/bullet-hell';
+
+  document.addEventListener('astro:page-load', () => {
+    const btn = document.getElementById('start-game');
+    if (btn) initGame(btn);
+  });
+</script>
