@@ -1056,10 +1056,12 @@ function startGame() {
       if (particles[i].life <= 0) particles.splice(i, 1);
     }
 
-    // Check wave complete
+    // Check wave complete: all enemies spawned, none alive on screen, no enemy bullets left
+    const enemyBulletsLeft = bullets.some((b) => b.owner === 'enemy');
     if (
       state.phase === 'playing' &&
-      state.enemiesRemaining <= 0 &&
+      enemies.length === 0 &&
+      !enemyBulletsLeft &&
       (state.enemiesSpawned >= state.enemiesPerWave || isBossWave())
     ) {
       state.wave++;
