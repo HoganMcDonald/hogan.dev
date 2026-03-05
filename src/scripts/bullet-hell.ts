@@ -2,8 +2,8 @@
 // Words from the page become enemy waves in a top-down shooter
 
 type BulletOwner = 'player' | 'enemy';
-type BulletType = 'normal' | 'exploding' | 'homing';
 type EnemyPattern = 'straight' | 'sine' | 'zigzag';
+type EnemyAttack = 'aimed' | 'radial' | 'laser' | 'mine';
 type Phase = 'playing' | 'waveIntro' | 'shop' | 'gameOver';
 
 interface Player {
@@ -31,8 +31,15 @@ interface Bullet {
   h: number;
   alive: boolean;
   owner: BulletOwner;
-  type: BulletType;
+  homing: boolean;
+  exploding: boolean;
   target?: Enemy;
+  // mine fields
+  isMine: boolean;
+  fuseTimer: number;
+  // laser fields
+  isLaser: boolean;
+  laserLife: number;
 }
 
 interface Enemy {
@@ -52,6 +59,7 @@ interface Enemy {
   baseX: number;
   time: number;
   canShoot: boolean;
+  attackType: EnemyAttack;
   shootTimer: number;
   shootInterval: number;
 }
@@ -106,6 +114,15 @@ const COLORS = {
   fgBright: '#c0caf5',
   fgMuted: '#565f89',
   bgSurface: '#24283b',
+};
+
+const BULLET_DEFAULTS = {
+  homing: false,
+  exploding: false,
+  isMine: false,
+  fuseTimer: 0,
+  isLaser: false,
+  laserLife: 0,
 };
 
 export function initGame(button: HTMLElement) {
@@ -206,11 +223,26 @@ function startGame() {
   };
 
   function enemiesShootThisWave(): boolean {
-    return state.wave >= 5;
+    return state.wave >= 3;
   }
 
   function enemyHpBonus(): number {
     return Math.floor(state.wave / 5);
+  }
+
+  // Determine which attack types are available at this wave
+  // Wave 3: aimed, Wave 6: radial, Wave 9: laser, Wave 12: mine
+  function availableAttacks(): EnemyAttack[] {
+    const attacks: EnemyAttack[] = ['aimed'];
+    if (state.wave >= 6) attacks.push('radial');
+    if (state.wave >= 9) attacks.push('laser');
+    if (state.wave >= 12) attacks.push('mine');
+    return attacks;
+  }
+
+  function pickAttack(): EnemyAttack {
+    const attacks = availableAttacks();
+    return attacks[Math.floor(Math.random() * attacks.length)];
   }
 
   function pct(n: number): string {
@@ -263,7 +295,7 @@ function startGame() {
       {
         id: 'gun_exploding',
         name: 'Exploding Rounds',
-        desc: `+15% chance to fire explosive (current: ${pct(player.explodingChance)})`,
+        desc: `+15% chance to explode on hit (current: ${pct(player.explodingChance)})`,
         cost: 3,
         available: () => player.explodingChance < 1,
         apply: () => {
@@ -273,7 +305,7 @@ function startGame() {
       {
         id: 'gun_homing',
         name: 'Homing Rounds',
-        desc: `+15% chance to fire homing (current: ${pct(player.homingChance)})`,
+        desc: `+15% chance to track enemies (current: ${pct(player.homingChance)})`,
         cost: 3,
         available: () => player.homingChance < 1,
         apply: () => {
@@ -335,12 +367,15 @@ function startGame() {
       baseX: x,
       time: 0,
       canShoot,
+      attackType: canShoot ? pickAttack() : 'aimed',
       shootTimer: 1 + Math.random() * 2,
       shootInterval: Math.max(1.5, 3 - state.wave * 0.1),
     });
   }
 
-  function spawnEnemyBullet(e: Enemy) {
+  // --- Enemy attack functions ---
+
+  function fireAimed(e: Enemy) {
     const dx = player.x - e.x;
     const dy = player.y - e.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
@@ -355,16 +390,92 @@ function startGame() {
       h: 6,
       alive: true,
       owner: 'enemy',
-      type: 'normal',
+      ...BULLET_DEFAULTS,
     });
+  }
+
+  function fireRadial(e: Enemy) {
+    const count = 8 + Math.floor(state.wave / 3);
+    const speed = 140 + state.wave * 3;
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + e.time;
+      bullets.push({
+        x: e.x,
+        y: e.y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        w: 5,
+        h: 5,
+        alive: true,
+        owner: 'enemy',
+        ...BULLET_DEFAULTS,
+      });
+    }
+  }
+
+  function fireLaser(e: Enemy) {
+    // Laser: a tall thin beam that spawns below the enemy, aimed at player's current x
+    const lx = player.x;
+    const ly = e.y + e.h / 2;
+    bullets.push({
+      x: lx,
+      y: ly,
+      vx: 0,
+      vy: 0,
+      w: 12,
+      h: H - ly,
+      alive: true,
+      owner: 'enemy',
+      ...BULLET_DEFAULTS,
+      isLaser: true,
+      laserLife: 0.4,
+    });
+    // Warning particles along beam
+    for (let py = ly; py < H; py += 40) {
+      particles.push({
+        x: lx + (Math.random() - 0.5) * 10,
+        y: py,
+        vx: (Math.random() - 0.5) * 60,
+        vy: (Math.random() - 0.5) * 30,
+        life: 0.3,
+        maxLife: 0.3,
+        char: '|',
+        color: COLORS.red,
+        size: 16,
+      });
+    }
+  }
+
+  function dropMine(e: Enemy) {
+    bullets.push({
+      x: e.x,
+      y: e.y + e.h / 2,
+      vx: 0,
+      vy: 0,
+      w: 14,
+      h: 14,
+      alive: true,
+      owner: 'enemy',
+      ...BULLET_DEFAULTS,
+      isMine: true,
+      fuseTimer: 3 + Math.random() * 2,
+    });
+  }
+
+  function enemyShoot(e: Enemy) {
+    switch (e.attackType) {
+      case 'aimed': fireAimed(e); break;
+      case 'radial': fireRadial(e); break;
+      case 'laser': fireLaser(e); break;
+      case 'mine': dropMine(e); break;
+    }
   }
 
   function spawnExplosion(x: number, y: number) {
     for (let i = 0; i < 12; i++) {
       const angle = (Math.PI * 2 * i) / 12;
       particles.push({
-        x,
-        y,
+        x, y,
         vx: Math.cos(angle) * 150,
         vy: Math.sin(angle) * 150,
         life: 0.4,
@@ -374,7 +485,6 @@ function startGame() {
         size: 14,
       });
     }
-    // Damage nearby enemies
     for (const e of enemies) {
       if (!e.alive) continue;
       const dx = e.x - x;
@@ -393,11 +503,26 @@ function startGame() {
     }
   }
 
+  function spawnMineExplosion(x: number, y: number) {
+    for (let i = 0; i < 16; i++) {
+      const angle = (Math.PI * 2 * i) / 16;
+      particles.push({
+        x, y,
+        vx: Math.cos(angle) * 120,
+        vy: Math.sin(angle) * 120,
+        life: 0.5,
+        maxLife: 0.5,
+        char: '#',
+        color: COLORS.yellow,
+        size: 12,
+      });
+    }
+  }
+
   function spawnParticles(x: number, y: number, word: string) {
     for (const char of word) {
       particles.push({
-        x,
-        y,
+        x, y,
         vx: (Math.random() - 0.5) * 200,
         vy: (Math.random() - 0.5) * 200,
         life: 0.6 + Math.random() * 0.4,
@@ -452,40 +577,40 @@ function startGame() {
     return best;
   }
 
-  function rollBulletType(): BulletType {
-    const roll = Math.random();
-    // Check homing first, then exploding, else normal
-    // If both have chances, they compete independently
-    if (roll < player.homingChance) return 'homing';
-    if (roll < player.homingChance + player.explodingChance) return 'exploding';
-    return 'normal';
-  }
-
   function firePlayerBullet(now: number) {
     if (playerBulletCount() >= player.maxBullets) return;
     if (now - player.lastShot < player.shootCooldown * 1000) return;
     player.lastShot = now;
 
-    const type = rollBulletType();
+    // Roll homing and exploding independently — both can be true
+    const isHoming = Math.random() < player.homingChance;
+    const isExploding = Math.random() < player.explodingChance;
+
     const bx = player.x;
     const by = player.y - player.h / 2;
+    const target = isHoming ? findNearestEnemy(bx, by) : undefined;
 
-    if (type === 'homing') {
-      const target = findNearestEnemy(bx, by);
-      bullets.push({
-        x: bx, y: by, vx: 0, vy: -500, w: 5, h: 10,
-        alive: true, owner: 'player', type: 'homing', target,
-      });
-    } else {
-      bullets.push({
-        x: bx, y: by, vx: 0, vy: -600, w: 4, h: 12,
-        alive: true, owner: 'player', type,
-      });
-    }
+    bullets.push({
+      x: bx,
+      y: by,
+      vx: 0,
+      vy: isHoming ? -500 : -600,
+      w: isHoming ? 5 : 4,
+      h: isHoming ? 10 : 12,
+      alive: true,
+      owner: 'player',
+      homing: isHoming,
+      exploding: isExploding,
+      target,
+      isMine: false,
+      fuseTimer: 0,
+      isLaser: false,
+      laserLife: 0,
+    });
   }
 
   function update(dt: number, now: number) {
-    // Shop phase — handle input separately
+    // Shop phase
     if (state.phase === 'shop') {
       if (keyJustPressed['w'] || keyJustPressed['arrowup']) {
         state.shopSelection = Math.max(0, state.shopSelection - 1);
@@ -495,7 +620,6 @@ function startGame() {
       }
       if (keyJustPressed['enter'] || keyJustPressed[' ']) {
         if (state.shopSelection === shopItems.length) {
-          // "Continue" option
           startWave();
         } else {
           const item = shopItems[state.shopSelection];
@@ -506,7 +630,6 @@ function startGame() {
           }
         }
       }
-      // Clear just-pressed keys at end of shop update
       for (const k in keyJustPressed) delete keyJustPressed[k];
       return;
     }
@@ -558,8 +681,36 @@ function startGame() {
     // Update bullets
     for (const b of bullets) {
       if (!b.alive) continue;
-      // Homing logic
-      if (b.type === 'homing' && b.owner === 'player') {
+
+      // Laser lifetime
+      if (b.isLaser) {
+        b.laserLife -= dt;
+        if (b.laserLife <= 0) b.alive = false;
+        continue; // lasers don't move
+      }
+
+      // Mine fuse
+      if (b.isMine) {
+        b.fuseTimer -= dt;
+        if (b.fuseTimer <= 0) {
+          b.alive = false;
+          spawnMineExplosion(b.x, b.y);
+          // Damage player if nearby
+          if (
+            now > player.invincibleUntil &&
+            Math.abs(b.x - player.x) < 60 &&
+            Math.abs(b.y - player.y) < 60
+          ) {
+            player.hp--;
+            player.invincibleUntil = now + 1500;
+            if (player.hp <= 0) state.phase = 'gameOver';
+          }
+        }
+        continue; // mines don't move
+      }
+
+      // Homing logic (player bullets only)
+      if (b.homing && b.owner === 'player') {
         if (!b.target || !b.target.alive) b.target = findNearestEnemy(b.x, b.y);
         if (b.target) {
           const tdx = b.target.x - b.x;
@@ -605,7 +756,7 @@ function startGame() {
       if (e.canShoot && e.y > 0 && e.y < H * 0.7) {
         e.shootTimer -= dt;
         if (e.shootTimer <= 0) {
-          spawnEnemyBullet(e);
+          enemyShoot(e);
           e.shootTimer = e.shootInterval;
         }
       }
@@ -630,12 +781,18 @@ function startGame() {
     // Enemy bullet vs player
     for (const b of bullets) {
       if (!b.alive || b.owner !== 'enemy') continue;
+      // Mines don't collide directly, they explode on fuse
+      if (b.isMine) continue;
+      // Laser uses its full height as hitbox
+      const bw = b.isLaser ? b.w : b.w;
+      const bh = b.isLaser ? b.h : b.h;
+      const by = b.isLaser ? b.y + b.h / 2 : b.y;
       if (
         now > player.invincibleUntil &&
-        Math.abs(b.x - player.x) < (b.w + player.w) / 2 &&
-        Math.abs(b.y - player.y) < (b.h + player.h) / 2
+        Math.abs(b.x - player.x) < (bw + player.w) / 2 &&
+        Math.abs(by - player.y) < (bh + player.h) / 2
       ) {
-        b.alive = false;
+        if (!b.isLaser) b.alive = false; // lasers persist through hits
         player.hp--;
         player.invincibleUntil = now + 1500;
         if (player.hp <= 0) state.phase = 'gameOver';
@@ -654,7 +811,7 @@ function startGame() {
           b.alive = false;
           e.hp--;
           e.hitFlash = 1;
-          if (b.type === 'exploding') {
+          if (b.exploding) {
             spawnExplosion(b.x, b.y);
           }
           if (e.hp <= 0) {
@@ -701,6 +858,8 @@ function startGame() {
     for (const k in keyJustPressed) delete keyJustPressed[k];
   }
 
+  // --- Drawing ---
+
   function drawPlayer(now: number) {
     const invincible = now < player.invincibleUntil;
     const blink = invincible && Math.floor(now / 80) % 2 === 0;
@@ -732,12 +891,18 @@ function startGame() {
   function drawBullets() {
     for (const b of bullets) {
       ctx.save();
+
       if (b.owner === 'player') {
-        if (b.type === 'exploding') {
+        // Combo bullet: homing+exploding = yellow-green
+        if (b.homing && b.exploding) {
+          ctx.shadowColor = COLORS.yellow;
+          ctx.shadowBlur = 12;
+          ctx.fillStyle = COLORS.yellow;
+        } else if (b.exploding) {
           ctx.shadowColor = COLORS.orange;
           ctx.shadowBlur = 10;
           ctx.fillStyle = COLORS.orange;
-        } else if (b.type === 'homing') {
+        } else if (b.homing) {
           ctx.shadowColor = COLORS.green;
           ctx.shadowBlur = 10;
           ctx.fillStyle = COLORS.green;
@@ -746,18 +911,36 @@ function startGame() {
           ctx.shadowBlur = 8;
           ctx.fillStyle = COLORS.cyan;
         }
+        ctx.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+      } else if (b.isLaser) {
+        // Laser beam
+        ctx.shadowColor = COLORS.red;
+        ctx.shadowBlur = 20;
+        ctx.fillStyle = `rgba(247,118,142,${0.4 + Math.random() * 0.3})`;
+        ctx.fillRect(b.x - b.w / 2, b.y, b.w, b.h);
+        // Bright core
+        ctx.fillStyle = `rgba(255,255,255,${0.3 + Math.random() * 0.2})`;
+        ctx.fillRect(b.x - 2, b.y, 4, b.h);
+      } else if (b.isMine) {
+        // Mine: pulsing diamond
+        const pulse = 1 + Math.sin(b.fuseTimer * 6) * 0.2;
+        ctx.shadowColor = b.fuseTimer < 1 ? COLORS.red : COLORS.yellow;
+        ctx.shadowBlur = b.fuseTimer < 1 ? 16 : 8;
+        ctx.fillStyle = b.fuseTimer < 1 ? COLORS.red : COLORS.yellow;
+        ctx.translate(b.x, b.y);
+        ctx.rotate(Math.PI / 4);
+        const s = (b.w / 2) * pulse;
+        ctx.fillRect(-s, -s, s * 2, s * 2);
       } else {
+        // Normal enemy bullet
         ctx.shadowColor = COLORS.red;
         ctx.shadowBlur = 8;
         ctx.fillStyle = COLORS.red;
-      }
-      if (b.owner === 'enemy') {
         ctx.beginPath();
         ctx.arc(b.x, b.y, b.w / 2 + 1, 0, Math.PI * 2);
         ctx.fill();
-      } else {
-        ctx.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
       }
+
       ctx.restore();
     }
   }
@@ -769,25 +952,46 @@ function startGame() {
     for (const e of enemies) {
       const flash = e.hitFlash > 0;
       ctx.save();
+
+      // Color based on attack type when shooting
+      let glowColor = COLORS.purple;
+      let bgColor = `rgba(187,154,247,0.3)`;
+      if (e.canShoot) {
+        switch (e.attackType) {
+          case 'aimed':
+            glowColor = COLORS.orange;
+            bgColor = `rgba(255,158,100,0.3)`;
+            break;
+          case 'radial':
+            glowColor = COLORS.red;
+            bgColor = `rgba(247,118,142,0.3)`;
+            break;
+          case 'laser':
+            glowColor = COLORS.blue;
+            bgColor = `rgba(122,162,247,0.3)`;
+            break;
+          case 'mine':
+            glowColor = COLORS.yellow;
+            bgColor = `rgba(224,175,104,0.3)`;
+            break;
+        }
+      }
+
       if (flash) {
         ctx.shadowColor = COLORS.red;
         ctx.shadowBlur = 16;
       } else {
-        ctx.shadowColor = e.canShoot ? COLORS.orange : COLORS.purple;
+        ctx.shadowColor = glowColor;
         ctx.shadowBlur = 6;
       }
-      const alpha = flash ? 0.5 : 0.3;
-      ctx.fillStyle = flash
-        ? `rgba(247,118,142,${alpha})`
-        : e.canShoot
-          ? `rgba(255,158,100,${alpha})`
-          : `rgba(187,154,247,${alpha})`;
+      ctx.fillStyle = flash ? `rgba(247,118,142,0.5)` : bgColor;
       ctx.fillRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
-      ctx.strokeStyle = flash ? COLORS.red : e.canShoot ? COLORS.orange : COLORS.purple;
+      ctx.strokeStyle = flash ? COLORS.red : glowColor;
       ctx.lineWidth = 1;
       ctx.strokeRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
       ctx.fillStyle = flash ? COLORS.red : COLORS.fgBright;
       ctx.fillText(e.word, e.x, e.y);
+
       if (e.maxHp > 1) {
         const barW = e.w - 4;
         const barH = 3;
@@ -797,6 +1001,18 @@ function startGame() {
         ctx.fillStyle = COLORS.green;
         ctx.fillRect(e.x - barW / 2, barY, barW * (e.hp / e.maxHp), barH);
       }
+
+      // Attack type indicator for shooting enemies
+      if (e.canShoot) {
+        ctx.font = '9px monospace';
+        ctx.fillStyle = glowColor;
+        const labels: Record<EnemyAttack, string> = {
+          aimed: 'AIM', radial: 'RAD', laser: 'LAS', mine: 'MIN',
+        };
+        ctx.fillText(labels[e.attackType], e.x, e.y + e.h / 2 + 8);
+        ctx.font = '16px monospace';
+      }
+
       ctx.restore();
     }
   }
@@ -831,11 +1047,9 @@ function startGame() {
     ctx.textBaseline = 'top';
     ctx.fillText(`HP ${player.hp}/${player.maxHp}`, hudPad, hudPad + barH + 4);
 
-    // Points (currency)
     ctx.fillStyle = COLORS.yellow;
     ctx.fillText(`PTS: ${state.points}`, hudPad, hudPad + barH + 20);
 
-    // Gun chances
     if (player.homingChance > 0 || player.explodingChance > 0) {
       ctx.fillStyle = COLORS.fgMuted;
       const parts: string[] = [];
@@ -844,13 +1058,11 @@ function startGame() {
       ctx.fillText(parts.join('  '), hudPad, hudPad + barH + 36);
     }
 
-    // Score
     ctx.textAlign = 'right';
     ctx.font = '16px monospace';
     ctx.fillStyle = COLORS.cyan;
     ctx.fillText(`${state.score}`, W - hudPad, hudPad);
 
-    // Wave
     ctx.font = '12px monospace';
     ctx.fillStyle = COLORS.fgMuted;
     ctx.fillText(`Wave ${state.wave}`, W - hudPad, hudPad + 20);
@@ -863,7 +1075,6 @@ function startGame() {
     const cx = W / 2;
     const startY = H * 0.12;
 
-    // Title
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.shadowColor = COLORS.cyan;
@@ -873,12 +1084,10 @@ function startGame() {
     ctx.fillText('UPGRADE SHOP', cx, startY);
     ctx.shadowBlur = 0;
 
-    // Points display
     ctx.font = '16px monospace';
     ctx.fillStyle = COLORS.yellow;
     ctx.fillText(`Points: ${state.points}`, cx, startY + 40);
 
-    // Gun chances summary
     if (player.homingChance > 0 || player.explodingChance > 0) {
       ctx.font = '13px monospace';
       ctx.fillStyle = COLORS.fgMuted;
@@ -888,7 +1097,6 @@ function startGame() {
       ctx.fillText(parts.join('  |  '), cx, startY + 65);
     }
 
-    // Items
     const itemStartY = startY + 90;
     const itemH = 56;
     const itemW = 380;
@@ -899,25 +1107,21 @@ function startGame() {
       const selected = i === state.shopSelection;
       const canBuy = item.available() && state.points >= item.cost;
 
-      // Background
       ctx.fillStyle = selected ? 'rgba(125,207,255,0.1)' : 'rgba(36,40,59,0.6)';
       ctx.fillRect(cx - itemW / 2, y, itemW, itemH - 6);
       ctx.strokeStyle = selected ? COLORS.cyan : COLORS.fgMuted;
       ctx.lineWidth = selected ? 2 : 1;
       ctx.strokeRect(cx - itemW / 2, y, itemW, itemH - 6);
 
-      // Name
       ctx.textAlign = 'left';
       ctx.font = 'bold 14px monospace';
       ctx.fillStyle = canBuy ? COLORS.fgBright : COLORS.fgMuted;
       ctx.fillText(item.name, cx - itemW / 2 + 12, y + 18);
 
-      // Description
       ctx.font = '12px monospace';
       ctx.fillStyle = COLORS.fgMuted;
       ctx.fillText(item.desc, cx - itemW / 2 + 12, y + 36);
 
-      // Cost
       ctx.textAlign = 'right';
       ctx.font = 'bold 14px monospace';
       ctx.fillStyle = canBuy ? COLORS.yellow : COLORS.red;
@@ -926,11 +1130,10 @@ function startGame() {
       if (!item.available()) {
         ctx.fillStyle = COLORS.fgMuted;
         ctx.font = '11px monospace';
-        ctx.fillText('OWNED', cx + itemW / 2 - 12, y + 36);
+        ctx.fillText('MAX', cx + itemW / 2 - 12, y + 36);
       }
     }
 
-    // Continue option
     const contY = itemStartY + shopItems.length * itemH;
     const selected = state.shopSelection === shopItems.length;
     ctx.fillStyle = selected ? 'rgba(158,206,106,0.15)' : 'rgba(36,40,59,0.6)';
@@ -943,11 +1146,19 @@ function startGame() {
     ctx.fillStyle = selected ? COLORS.green : COLORS.fgMuted;
     ctx.fillText(`>> WAVE ${state.wave} >>`, cx, contY + 22);
 
-    // Controls hint
     ctx.font = '12px monospace';
     ctx.fillStyle = COLORS.fgMuted;
     ctx.textAlign = 'center';
     ctx.fillText('W/S to select  |  ENTER/SPACE to buy', cx, contY + itemH + 16);
+  }
+
+  function waveIntroWarning(): string | null {
+    const w = state.wave;
+    if (w === 3) return 'ENEMIES ARE SHOOTING BACK!';
+    if (w === 6) return 'NEW THREAT: RADIAL SHOTS';
+    if (w === 9) return 'NEW THREAT: LASER BEAMS';
+    if (w === 12) return 'NEW THREAT: LAND MINES';
+    return null;
   }
 
   function drawWaveIntro() {
@@ -959,11 +1170,14 @@ function startGame() {
     ctx.fillStyle = COLORS.cyan;
     ctx.fillText(`WAVE ${state.wave}`, W / 2, H / 2 - 40);
     ctx.shadowBlur = 0;
-    if (enemiesShootThisWave()) {
+
+    const warning = waveIntroWarning();
+    if (warning) {
       ctx.font = '14px monospace';
       ctx.fillStyle = COLORS.orange;
-      ctx.fillText('ENEMIES ARE SHOOTING BACK!', W / 2, H / 2);
+      ctx.fillText(warning, W / 2, H / 2);
     }
+
     ctx.font = '14px monospace';
     ctx.fillStyle = COLORS.fgMuted;
     ctx.fillText('WASD to move  /  SPACE to shoot', W / 2, H / 2 + 30);
@@ -1009,7 +1223,6 @@ function startGame() {
     if (state.phase === 'gameOver') drawGameOver();
   }
 
-  // Restart on Enter during game over
   function handleRestart(e: KeyboardEvent) {
     if (state.phase === 'gameOver' && e.key === 'Enter') {
       cleanup();
@@ -1019,7 +1232,6 @@ function startGame() {
   }
   window.addEventListener('keydown', handleRestart);
 
-  // ESC to quit
   function handleEsc(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       cleanup();
