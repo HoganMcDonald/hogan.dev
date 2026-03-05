@@ -1,0 +1,158 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="Uses" description="Tools, software, and hardware I use daily.">
+  <section class="py-8">
+    <h1 class="text-3xl font-bold text-fg-bright mb-2">Uses</h1>
+    <p class="text-fg-muted mb-10">Tools and software I use daily. Managed with Ansible from a single repo.</p>
+
+    <div class="space-y-10">
+      <div>
+        <h2 class="text-lg font-bold text-yellow mb-4">Terminal</h2>
+        <dl class="uses-list">
+          <dt>Ghostty</dt>
+          <dd>GPU-accelerated terminal emulator. Catppuccin Mocha theme, JetBrains Mono Nerd Font.</dd>
+          <dt>zsh</dt>
+          <dd>Shell with Oh My ZSH, Starship prompt, syntax highlighting, and auto-suggestions.</dd>
+          <dt>tmux</dt>
+          <dd>Terminal multiplexer with tmuxinator for session templates.</dd>
+        </dl>
+      </div>
+
+      <div>
+        <h2 class="text-lg font-bold text-yellow mb-4">Editor</h2>
+        <dl class="uses-list">
+          <dt>Neovim</dt>
+          <dd>Primary editor. Lua config with lazy.nvim, ~25 plugins including Catppuccin, Flash, Fugitive, Neotest, and Snacks.</dd>
+          <dt>Claude Code</dt>
+          <dd>AI pair programmer in the terminal.</dd>
+        </dl>
+      </div>
+
+      <div>
+        <h2 class="text-lg font-bold text-yellow mb-4">Desktop</h2>
+        <dl class="uses-list">
+          <dt>AeroSpace</dt>
+          <dd>Tiling window manager for macOS.</dd>
+          <dt>SketchyBar</dt>
+          <dd>Custom status bar with Lua-based config. Battery, clock, workspace, and mode indicators.</dd>
+          <dt>Karabiner Elements</dt>
+          <dd>Advanced key remapping.</dd>
+          <dt>Sol</dt>
+          <dd>Open-source Spotlight replacement for app launching.</dd>
+        </dl>
+      </div>
+
+      <div>
+        <h2 class="text-lg font-bold text-yellow mb-4">Dev Tools</h2>
+        <dl class="uses-list">
+          <dt>git-town</dt>
+          <dd>Feature branch management. Handles syncing, proposing, and stacking branches.</dd>
+          <dt>lazygit</dt>
+          <dd>Git TUI for staging, committing, and rebasing.</dd>
+          <dt>GitHub CLI</dt>
+          <dd>PR workflows and the gh-dash extension.</dd>
+          <dt>devbox</dt>
+          <dd>Isolated, reproducible dev environments per project.</dd>
+          <dt>direnv</dt>
+          <dd>Automatic environment switching per directory.</dd>
+        </dl>
+      </div>
+
+      <div>
+        <h2 class="text-lg font-bold text-yellow mb-4">Languages & Runtimes</h2>
+        <dl class="uses-list">
+          <dt>TypeScript / JavaScript</dt>
+          <dd>Primary language. Node.js managed via asdf.</dd>
+          <dt>Rust</dt>
+          <dd>Systems-level side projects.</dd>
+          <dt>Lua</dt>
+          <dd>Neovim and SketchyBar configuration.</dd>
+          <dt>Ruby</dt>
+          <dd>Occasional use. Managed via asdf.</dd>
+        </dl>
+      </div>
+
+      <div>
+        <h2 class="text-lg font-bold text-yellow mb-4">CLI Utilities</h2>
+        <dl class="uses-list">
+          <dt>bat</dt>
+          <dd>Better cat with syntax highlighting.</dd>
+          <dt>ripgrep</dt>
+          <dd>Fast grep alternative.</dd>
+          <dt>fzf</dt>
+          <dd>Fuzzy finder for files and history.</dd>
+          <dt>delta</dt>
+          <dd>Syntax-highlighted git diffs.</dd>
+          <dt>tldr</dt>
+          <dd>Simplified man pages.</dd>
+          <dt>htop</dt>
+          <dd>System monitoring.</dd>
+          <dt>pgcli / mycli</dt>
+          <dd>Enhanced PostgreSQL and MySQL CLI clients.</dd>
+          <dt>lazydocker</dt>
+          <dd>Docker TUI.</dd>
+          <dt>yazi</dt>
+          <dd>Terminal file manager, integrated with Neovim.</dd>
+        </dl>
+      </div>
+
+      <div>
+        <h2 class="text-lg font-bold text-yellow mb-4">Apps</h2>
+        <dl class="uses-list">
+          <dt>Linear</dt>
+          <dd>Project management and issue tracking.</dd>
+          <dt>Figma</dt>
+          <dd>Design and prototyping.</dd>
+          <dt>Notion</dt>
+          <dd>Knowledge base and notes.</dd>
+          <dt>OrbStack</dt>
+          <dd>Lightweight Docker runtime for macOS.</dd>
+          <dt>Brave / Zen</dt>
+          <dd>Privacy-focused browsers.</dd>
+          <dt>Brain.fm</dt>
+          <dd>Focus music.</dd>
+        </dl>
+      </div>
+
+      <div>
+        <h2 class="text-lg font-bold text-yellow mb-4">Infrastructure</h2>
+        <dl class="uses-list">
+          <dt>Ansible</dt>
+          <dd>The whole setup is an Ansible playbook. One command bootstraps a fresh Mac.</dd>
+          <dt>Homebrew</dt>
+          <dd>Package manager for macOS.</dd>
+          <dt>asdf</dt>
+          <dd>Multi-language version manager for Node, Ruby, Lua, Neovim.</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  @reference "../styles/global.css";
+
+  .uses-list {
+    display: grid;
+    gap: 0;
+  }
+
+  .uses-list dt {
+    color: var(--color-fg-bright);
+    font-weight: 600;
+    padding-top: 0.75rem;
+  }
+
+  .uses-list dd {
+    color: var(--color-fg);
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--color-bg-surface);
+    margin-left: 0;
+  }
+
+  .uses-list dd:last-of-type {
+    border-bottom: none;
+  }
+</style>
