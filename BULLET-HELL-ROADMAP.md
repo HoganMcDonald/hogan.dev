@@ -39,13 +39,13 @@
 
 ## Visual / Juice
 
-- [ ] **Screen shake** on boss hits and explosions
-- [ ] **Bullet grazing** — near-miss particles + small point bonus for dodging close
-- [ ] **Kill streaks** — visual escalation (screen border glow, particle intensity) as combo builds
-- [ ] **Slow-mo on boss kill** — brief time dilation + dramatic particle burst
+- [x] **Screen shake** on boss hits and explosions
+- [x] **Bullet grazing** — near-miss particles + small point bonus for dodging close
+- [x] **Kill streaks** — visual escalation (screen border glow, particle intensity) as combo builds
+- [x] **Slow-mo on boss kill** — brief time dilation + dramatic particle burst
 
 ## Quality of Life
 
-- [ ] **Enhancement reroll** in shop — spend points to swap a crate drop
-- [ ] **Enhancement sacrifice** — destroy an equipped enhancement for a big point/heal boost
-- [ ] **Pause menu** with stats (enemies killed, accuracy, time survived)
+- [x] **Enhancement reroll** in shop — spend points to swap a crate drop
+- [x] **Enhancement sacrifice** — destroy an equipped enhancement for a big point/heal boost
+- [x] **Pause menu** with stats (enemies killed, accuracy, time survived)

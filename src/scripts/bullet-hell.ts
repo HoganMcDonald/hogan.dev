@@ -4,7 +4,7 @@
 type BulletOwner = 'player' | 'enemy';
 type EnemyPattern = 'straight' | 'sine' | 'zigzag';
 type EnemyAttack = 'aimed' | 'radial' | 'laser' | 'mine';
-type Phase = 'playing' | 'waveIntro' | 'shop' | 'crateOpening' | 'gameOver';
+type Phase = 'playing' | 'waveIntro' | 'shop' | 'crateOpening' | 'gameOver' | 'paused';
 type EnhancementType = 'homing' | 'exploding' | 'radial' | 'orbital' | 'chainLightning' | 'golden' | 'gravityWell' | 'lifeDrain';
 
 interface EnhancementSlot {
@@ -65,6 +65,7 @@ interface Bullet {
   warningTimer: number;
   warningX: number;
   warningSourceY: number;
+  grazed: boolean;
 }
 
 interface Enemy {
@@ -131,6 +132,18 @@ interface GameState {
   bossActive: boolean;
   pendingCrate: LootCrate | null;
   crateSelection: number;
+  shakeIntensity: number;
+  shakeTimer: number;
+  timeScale: number;
+  timeScaleTimer: number;
+  combo: number;
+  comboTimer: number;
+  bestCombo: number;
+  grazeScore: number;
+  totalKills: number;
+  bulletsFired: number;
+  bulletsHit: number;
+  gameStartTime: number;
 }
 
 const COLORS = {
@@ -162,6 +175,7 @@ const BULLET_DEFAULTS = {
   warningTimer: 0,
   warningX: 0,
   warningSourceY: 0,
+  grazed: false,
 };
 
 export function initGame(button: HTMLElement) {
@@ -266,6 +280,18 @@ function startGame() {
     bossActive: false,
     pendingCrate: null,
     crateSelection: 0,
+    shakeIntensity: 0,
+    shakeTimer: 0,
+    timeScale: 1,
+    timeScaleTimer: 0,
+    combo: 0,
+    comboTimer: 0,
+    bestCombo: 0,
+    grazeScore: 0,
+    totalKills: 0,
+    bulletsFired: 0,
+    bulletsHit: 0,
+    gameStartTime: performance.now(),
   };
 
   function enemiesShootThisWave(): boolean {
@@ -295,6 +321,11 @@ function startGame() {
 
   function pct(n: number): string {
     return `${Math.round(n * 100)}%`;
+  }
+
+  function triggerShake(intensity: number, duration: number) {
+    state.shakeIntensity = Math.max(state.shakeIntensity, intensity);
+    state.shakeTimer = Math.max(state.shakeTimer, duration);
   }
 
   // Shop prices scale: base cost + 1 per purchase + 1 per 3 waves
@@ -411,6 +442,22 @@ function startGame() {
           slot.level++;
           slot.chance = Math.min(1, slot.chance + chanceInc);
           purchaseCounts[slotId] = (purchaseCounts[slotId] || 0) + 1;
+        },
+      });
+
+      const sacrificeId = `sacrifice_${i}`;
+      const reward = 3 + slot.level * 2;
+      items.push({
+        id: sacrificeId,
+        name: `Sacrifice ${ENHANCEMENT_NAMES[slot.type]}`,
+        desc: `Destroy for +${reward} pts and +1 HP`,
+        cost: 0,
+        available: () => true,
+        apply: () => {
+          state.points += reward;
+          player.hp = Math.min(player.maxHp, player.hp + 1);
+          player.enhancementSlots[i] = null;
+          shopItems = buildShopItems();
         },
       });
     }
@@ -703,14 +750,42 @@ function startGame() {
   function killEnemy(e: Enemy) {
     e.alive = false;
     state.enemiesRemaining--;
+    state.totalKills++;
     const gilded = e.gildedTimer > 0;
     const mult = gilded ? 5 : 1;
     state.score += e.word.length * 10 * mult;
     state.points += 1 * mult;
+
+    // Combo tracking
+    state.combo++;
+    state.comboTimer = 3;
+    if (state.combo > state.bestCombo) state.bestCombo = state.combo;
+
     if (e.isBoss) {
       state.bossActive = false;
       state.points += 10 * mult;
       spawnBossDeathEffect(e.x, e.y);
+      triggerShake(12, 0.6);
+      // Slow-mo on boss kill
+      state.timeScale = 0.15;
+      state.timeScaleTimer = 1.5;
+      // Extra ring of large particles
+      for (let i = 0; i < 24; i++) {
+        const angle = (Math.PI * 2 * i) / 24;
+        const speed = 60 + Math.random() * 120;
+        const chars = ['*', '#', '!', '@', '%'];
+        const colors = [COLORS.cyan, COLORS.purple, COLORS.orange, COLORS.yellow];
+        particles.push({
+          x: e.x, y: e.y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 1.5 + Math.random() * 0.5,
+          maxLife: 2,
+          char: chars[Math.floor(Math.random() * chars.length)],
+          color: colors[Math.floor(Math.random() * colors.length)],
+          size: 16 + Math.random() * 12,
+        });
+      }
     }
     spawnParticles(e.x, e.y, e.word);
     if (gilded) {
@@ -733,6 +808,7 @@ function startGame() {
   }
 
   function spawnExplosion(x: number, y: number) {
+    triggerShake(5, 0.2);
     for (let i = 0; i < 12; i++) {
       const angle = (Math.PI * 2 * i) / 12;
       particles.push({
@@ -761,6 +837,7 @@ function startGame() {
   }
 
   function spawnMineExplosion(x: number, y: number) {
+    triggerShake(6, 0.25);
     for (let i = 0; i < 16; i++) {
       const angle = (Math.PI * 2 * i) / 16;
       particles.push({
@@ -797,17 +874,21 @@ function startGame() {
   }
 
   function spawnParticles(x: number, y: number, word: string) {
-    for (const char of word) {
-      particles.push({
-        x, y,
-        vx: (Math.random() - 0.5) * 200,
-        vy: (Math.random() - 0.5) * 200,
-        life: 0.6 + Math.random() * 0.4,
-        maxLife: 1,
-        char,
-        color: COLORS.cyan,
-        size: 14,
-      });
+    const comboMult = 1 + Math.min(state.combo * 0.1, 2);
+    const repeats = Math.ceil(comboMult);
+    for (let r = 0; r < repeats; r++) {
+      for (const char of word) {
+        particles.push({
+          x, y,
+          vx: (Math.random() - 0.5) * 200,
+          vy: (Math.random() - 0.5) * 200,
+          life: 0.6 + Math.random() * 0.4,
+          maxLife: 1,
+          char,
+          color: COLORS.cyan,
+          size: 14,
+        });
+      }
     }
   }
 
@@ -830,6 +911,7 @@ function startGame() {
 
   let lastTime = performance.now();
   let running = true;
+  let pausedFrom: Phase = 'playing';
 
   function cleanup() {
     running = false;
@@ -866,6 +948,7 @@ function startGame() {
     if (playerBulletCount() >= player.maxBullets) return;
     if (now - player.lastShot < player.shootCooldown * 1000) return;
     player.lastShot = now;
+    state.bulletsFired++;
 
     const enhancement = rollEnhancement();
     const bx = player.x;
@@ -935,11 +1018,52 @@ function startGame() {
     });
   }
 
-  function update(dt: number, now: number) {
+  function checkGrazing() {
+    for (const b of bullets) {
+      if (!b.alive || b.owner !== 'enemy' || b.isMine || b.isLaser || b.isLaserWarning || b.grazed) continue;
+      const dx = b.x - player.x;
+      const dy = b.y - player.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const collisionDist = (b.w + player.w) / 2;
+      if (dist < 30 && dist > collisionDist) {
+        b.grazed = true;
+        state.grazeScore += 5;
+        state.score += 5;
+        for (let i = 0; i < 3; i++) {
+          particles.push({
+            x: player.x + (Math.random() - 0.5) * 16,
+            y: player.y + (Math.random() - 0.5) * 16,
+            vx: (Math.random() - 0.5) * 60,
+            vy: (Math.random() - 0.5) * 60,
+            life: 0.3,
+            maxLife: 0.3,
+            char: '.',
+            color: '#fff',
+            size: 10,
+          });
+        }
+      }
+    }
+  }
+
+  function update(dt: number, rawDt: number, now: number) {
+    // Paused
+    if (state.phase === 'paused') {
+      for (const k in keyJustPressed) delete keyJustPressed[k];
+      return;
+    }
+
     // Crate opening phase
     if (state.phase === 'crateOpening') {
       const hasEmptySlot = player.enhancementSlots.some(s => s === null);
-      const optionCount = hasEmptySlot ? 2 : 1; // TAKE/SKIP or just SKIP
+      const rerollCost = 3 + Math.floor(state.wave / 2);
+      const canReroll = state.points >= rerollCost;
+      // Options: [TAKE (if empty slot), REROLL (if affordable), SKIP]
+      const options: string[] = [];
+      if (hasEmptySlot) options.push('TAKE');
+      if (canReroll) options.push('REROLL');
+      options.push('SKIP');
+      const optionCount = options.length;
       if (keyJustPressed['w'] || keyJustPressed['arrowup']) {
         state.crateSelection = Math.max(0, state.crateSelection - 1);
       }
@@ -947,8 +1071,8 @@ function startGame() {
         state.crateSelection = Math.min(optionCount - 1, state.crateSelection + 1);
       }
       if (keyJustPressed['enter'] || keyJustPressed[' ']) {
-        if (hasEmptySlot && state.crateSelection === 0) {
-          // TAKE
+        const chosen = options[state.crateSelection];
+        if (chosen === 'TAKE') {
           const idx = player.enhancementSlots.indexOf(null);
           if (idx !== -1 && state.pendingCrate) {
             const isGolden = state.pendingCrate.enhancement === 'golden';
@@ -958,10 +1082,20 @@ function startGame() {
               chance: isGolden ? 0.05 : 0.15,
             };
           }
+          state.pendingCrate = null;
+          enterShop();
+        } else if (chosen === 'REROLL') {
+          state.points -= rerollCost;
+          if (state.pendingCrate) {
+            const currentType = state.pendingCrate.enhancement;
+            const otherTypes = ALL_ENHANCEMENTS.filter(t => t !== currentType);
+            state.pendingCrate.enhancement = otherTypes[Math.floor(Math.random() * otherTypes.length)];
+          }
+          state.crateSelection = 0;
+        } else {
+          state.pendingCrate = null;
+          enterShop();
         }
-        // Both TAKE and SKIP clear the crate
-        state.pendingCrate = null;
-        enterShop();
       }
       for (const k in keyJustPressed) delete keyJustPressed[k];
       return;
@@ -1088,6 +1222,7 @@ function startGame() {
             ) {
               player.hp--;
               player.invincibleUntil = now + 1500;
+              triggerShake(10, 0.4);
               if (player.hp <= 0) state.phase = 'gameOver';
             }
           }
@@ -1230,6 +1365,7 @@ function startGame() {
       ) {
         player.hp--;
         player.invincibleUntil = now + 1500;
+        triggerShake(10, 0.4);
         if (player.hp <= 0) state.phase = 'gameOver';
       }
     }
@@ -1247,9 +1383,13 @@ function startGame() {
         if (!b.isLaser) b.alive = false;
         player.hp--;
         player.invincibleUntil = now + 1500;
+        triggerShake(10, 0.4);
         if (player.hp <= 0) state.phase = 'gameOver';
       }
     }
+
+    // Grazing check
+    checkGrazing();
 
     // Player bullet vs enemy collision
     for (const b of bullets) {
@@ -1279,6 +1419,7 @@ function startGame() {
           Math.abs(b.y - e.y) < (b.h + e.h) / 2
         ) {
           b.alive = false;
+          state.bulletsHit++;
           e.hp--;
           e.hitFlash = 1;
           if (b.enhancement === 'golden') {
@@ -1348,6 +1489,34 @@ function startGame() {
           }
           break;
         }
+      }
+    }
+
+    // Decay shake (uses raw dt)
+    if (state.shakeTimer > 0) {
+      state.shakeTimer -= rawDt;
+      state.shakeIntensity *= 0.9;
+      if (state.shakeTimer <= 0) {
+        state.shakeIntensity = 0;
+        state.shakeTimer = 0;
+      }
+    }
+
+    // Decay time scale (uses raw dt)
+    if (state.timeScaleTimer > 0) {
+      state.timeScaleTimer -= rawDt;
+      if (state.timeScaleTimer <= 0) {
+        state.timeScale = 1;
+        state.timeScaleTimer = 0;
+      }
+    }
+
+    // Decay combo (uses raw dt)
+    if (state.comboTimer > 0) {
+      state.comboTimer -= rawDt;
+      if (state.comboTimer <= 0) {
+        state.combo = 0;
+        state.comboTimer = 0;
       }
     }
 
@@ -1911,17 +2080,30 @@ function startGame() {
     ctx.shadowBlur = 30;
     ctx.font = 'bold 48px monospace';
     ctx.fillStyle = COLORS.red;
-    ctx.fillText('GAME OVER', W / 2, H / 2 - 50);
+    ctx.fillText('GAME OVER', W / 2, H / 2 - 100);
     ctx.shadowBlur = 0;
-    ctx.font = '20px monospace';
-    ctx.fillStyle = COLORS.cyan;
-    ctx.fillText(`Score: ${state.score}`, W / 2, H / 2 + 10);
-    ctx.fillStyle = COLORS.fgMuted;
-    ctx.font = '14px monospace';
-    ctx.fillText(`Wave ${state.wave}`, W / 2, H / 2 + 40);
+
+    const elapsed = Math.floor((performance.now() - state.gameStartTime) / 1000);
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    const accuracy = state.bulletsFired > 0 ? Math.round((state.bulletsHit / state.bulletsFired) * 100) : 0;
+
+    ctx.font = '15px monospace';
+    const stats = [
+      `Score: ${state.score}`,
+      `Wave: ${state.wave}`,
+      `Kills: ${state.totalKills}  |  Accuracy: ${accuracy}%`,
+      `Best Combo: ${state.bestCombo}x  |  Graze: ${state.grazeScore}`,
+      `Time: ${mins}:${secs.toString().padStart(2, '0')}`,
+    ];
+    for (let i = 0; i < stats.length; i++) {
+      ctx.fillStyle = i === 0 ? COLORS.cyan : COLORS.fg;
+      ctx.fillText(stats[i], W / 2, H / 2 - 40 + i * 26);
+    }
+
     ctx.fillStyle = COLORS.fgBright;
     ctx.font = '16px monospace';
-    ctx.fillText('[ ENTER to restart ]', W / 2, H / 2 + 80);
+    ctx.fillText('[ ENTER to restart ]', W / 2, H / 2 + 100);
   }
 
   function drawLootCrates(now: number) {
@@ -1998,20 +2180,29 @@ function startGame() {
     }
 
     const hasEmpty = player.enhancementSlots.some(s => s === null);
+    const rerollCost = 3 + Math.floor(state.wave / 2);
+    const canReroll = state.points >= rerollCost;
+    const options: string[] = [];
+    if (hasEmpty) options.push('TAKE');
+    if (canReroll) options.push('REROLL');
+    options.push('SKIP');
     const optY = startY + 270;
-    const options = hasEmpty ? ['TAKE', 'SKIP'] : ['SKIP'];
 
     for (let i = 0; i < options.length; i++) {
       const sel = i === state.crateSelection;
       const y = optY + i * 40;
       ctx.fillStyle = sel ? 'rgba(125,207,255,0.15)' : 'rgba(36,40,59,0.6)';
-      ctx.fillRect(cx - 80, y - 16, 160, 32);
+      ctx.fillRect(cx - 100, y - 16, 200, 32);
       ctx.strokeStyle = sel ? COLORS.cyan : COLORS.fgMuted;
       ctx.lineWidth = sel ? 2 : 1;
-      ctx.strokeRect(cx - 80, y - 16, 160, 32);
+      ctx.strokeRect(cx - 100, y - 16, 200, 32);
       ctx.fillStyle = sel ? COLORS.fgBright : COLORS.fgMuted;
       ctx.font = 'bold 16px monospace';
-      ctx.fillText(options[i], cx, y);
+      if (options[i] === 'REROLL') {
+        ctx.fillText(`REROLL (${rerollCost} pts)`, cx, y);
+      } else {
+        ctx.fillText(options[i], cx, y);
+      }
     }
 
     ctx.font = '12px monospace';
@@ -2019,8 +2210,123 @@ function startGame() {
     ctx.fillText('W/S to select  |  ENTER/SPACE to confirm', cx, optY + options.length * 40 + 20);
   }
 
+  function drawComboEffects() {
+    if (state.combo < 5) return;
+    ctx.save();
+    let color: string;
+    let alpha: number;
+    if (state.combo >= 20) {
+      color = COLORS.orange;
+      alpha = 0.25;
+    } else if (state.combo >= 10) {
+      color = COLORS.purple;
+      alpha = 0.18;
+    } else {
+      color = COLORS.cyan;
+      alpha = 0.12;
+    }
+    const gradient = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.min(W, H) * 0.7);
+    gradient.addColorStop(0, 'transparent');
+    gradient.addColorStop(1, color);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  function drawComboHUD() {
+    if (state.combo < 3) return;
+    ctx.save();
+    const pulse = 1 + Math.sin(performance.now() * 0.006) * 0.1;
+    const size = Math.floor(18 * pulse);
+    ctx.font = `bold ${size}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    let color = COLORS.cyan;
+    if (state.combo >= 20) color = COLORS.orange;
+    else if (state.combo >= 10) color = COLORS.purple;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = color;
+    ctx.fillText(`${state.combo}x COMBO`, W / 2, 20);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  function drawPauseMenu(now: number) {
+    ctx.fillStyle = 'rgba(26,27,38,0.85)';
+    ctx.fillRect(0, 0, W, H);
+
+    const cx = W / 2;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.shadowColor = COLORS.cyan;
+    ctx.shadowBlur = 30;
+    ctx.font = 'bold 40px monospace';
+    ctx.fillStyle = COLORS.cyan;
+    ctx.fillText('PAUSED', cx, H * 0.2);
+    ctx.shadowBlur = 0;
+
+    const elapsed = Math.floor((now - state.gameStartTime) / 1000);
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    const accuracy = state.bulletsFired > 0 ? Math.round((state.bulletsHit / state.bulletsFired) * 100) : 0;
+
+    const stats = [
+      ['Wave', `${state.wave}`],
+      ['Score', `${state.score}`],
+      ['Kills', `${state.totalKills}`],
+      ['Accuracy', `${accuracy}%`],
+      ['Best Combo', `${state.bestCombo}x`],
+      ['Graze Score', `${state.grazeScore}`],
+      ['Time', `${mins}:${secs.toString().padStart(2, '0')}`],
+    ];
+
+    const startY = H * 0.35;
+    ctx.font = '15px monospace';
+    for (let i = 0; i < stats.length; i++) {
+      const y = startY + i * 30;
+      ctx.fillStyle = COLORS.fgMuted;
+      ctx.textAlign = 'right';
+      ctx.fillText(stats[i][0], cx - 10, y);
+      ctx.fillStyle = COLORS.fgBright;
+      ctx.textAlign = 'left';
+      ctx.fillText(stats[i][1], cx + 10, y);
+    }
+
+    // Enhancement slots
+    ctx.textAlign = 'center';
+    ctx.font = '13px monospace';
+    ctx.fillStyle = COLORS.fgMuted;
+    const enhY = startY + stats.length * 30 + 20;
+    ctx.fillText('Enhancements:', cx, enhY);
+    for (let i = 0; i < 3; i++) {
+      const slot = player.enhancementSlots[i];
+      const sy = enhY + 25 + i * 22;
+      if (slot) {
+        ctx.fillStyle = ENHANCEMENT_COLORS[slot.type];
+        ctx.fillText(`${ENHANCEMENT_NAMES[slot.type]} Lv${slot.level}`, cx, sy);
+      } else {
+        ctx.fillStyle = COLORS.fgMuted;
+        ctx.fillText('-- empty --', cx, sy);
+      }
+    }
+
+    ctx.font = '14px monospace';
+    ctx.fillStyle = COLORS.fgMuted;
+    ctx.textAlign = 'center';
+    ctx.fillText('ESC to resume', cx, H * 0.85);
+  }
+
   function draw(now: number) {
     ctx.clearRect(0, 0, W, H);
+
+    if (state.phase === 'paused') {
+      drawPauseMenu(now);
+      return;
+    }
 
     if (state.phase === 'shop') {
       drawShop();
@@ -2032,16 +2338,31 @@ function startGame() {
       return;
     }
 
+    // Screen shake
+    const shaking = state.shakeIntensity > 0.5 && state.shakeTimer > 0;
+    if (shaking) {
+      ctx.save();
+      const sx = (Math.random() - 0.5) * state.shakeIntensity * 2;
+      const sy = (Math.random() - 0.5) * state.shakeIntensity * 2;
+      ctx.translate(sx, sy);
+    }
+
     drawPlayer(now);
     drawBullets(now);
     drawEnemies();
     drawLootCrates(now);
     drawLightning();
     drawParticles();
+    drawComboEffects();
     drawHUD();
+    drawComboHUD();
 
     if (state.phase === 'waveIntro') drawWaveIntro();
     if (state.phase === 'gameOver') drawGameOver();
+
+    if (shaking) {
+      ctx.restore();
+    }
   }
 
   function handleRestart(e: KeyboardEvent) {
@@ -2055,9 +2376,16 @@ function startGame() {
 
   function handleEsc(e: KeyboardEvent) {
     if (e.key === 'Escape') {
-      cleanup();
-      window.removeEventListener('keydown', handleEsc);
-      window.removeEventListener('keydown', handleRestart);
+      if (state.phase === 'playing' || state.phase === 'waveIntro') {
+        pausedFrom = state.phase;
+        state.phase = 'paused';
+      } else if (state.phase === 'paused') {
+        state.phase = pausedFrom;
+      } else {
+        cleanup();
+        window.removeEventListener('keydown', handleEsc);
+        window.removeEventListener('keydown', handleRestart);
+      }
     }
   }
   window.addEventListener('keydown', handleEsc);
@@ -2067,9 +2395,10 @@ function startGame() {
   function loop() {
     if (!running) return;
     const now = performance.now();
-    const dt = Math.min((now - lastTime) / 1000, 0.05);
+    const rawDt = Math.min((now - lastTime) / 1000, 0.05);
+    const dt = rawDt * state.timeScale;
     lastTime = now;
-    update(dt, now);
+    update(dt, rawDt, now);
     draw(now);
     requestAnimationFrame(loop);
   }
