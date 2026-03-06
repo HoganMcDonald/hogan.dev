@@ -562,19 +562,26 @@ function startGame() {
     }
   }
 
-  function dropMine(e: Enemy) {
+  function throwMine(e: Enemy) {
+    // Throw toward player's current position with some spread
+    const targetX = player.x + (Math.random() - 0.5) * 80;
+    const targetY = player.y + (Math.random() - 0.5) * 60;
+    const dx = targetX - e.x;
+    const dy = targetY - e.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const speed = 250 + Math.random() * 100;
     bullets.push({
       x: e.x,
       y: e.y + e.h / 2,
-      vx: 0,
-      vy: 0,
+      vx: dist > 0 ? (dx / dist) * speed : 0,
+      vy: dist > 0 ? (dy / dist) * speed : speed,
       w: 14,
       h: 14,
       alive: true,
       owner: 'enemy',
       ...BULLET_DEFAULTS,
       isMine: true,
-      fuseTimer: 3 + Math.random() * 2,
+      fuseTimer: -1, // negative = still in flight, starts counting after landing
     });
   }
 
@@ -583,7 +590,7 @@ function startGame() {
       case 'aimed': fireAimed(e); break;
       case 'radial': fireRadial(e); break;
       case 'laser': fireLaserWarning(e); break;
-      case 'mine': dropMine(e); break;
+      case 'mine': throwMine(e); break;
     }
   }
 
@@ -609,15 +616,9 @@ function startGame() {
         }
         break;
       case 'mine':
-        dropMine(e);
-        // Boss drops multiple mines
-        for (let i = 0; i < 3; i++) {
-          const mx = e.x + (Math.random() - 0.5) * 200;
-          bullets.push({
-            x: mx, y: e.y + e.h / 2, vx: 0, vy: 0, w: 14, h: 14,
-            alive: true, owner: 'enemy', ...BULLET_DEFAULTS,
-            isMine: true, fuseTimer: 2 + Math.random() * 2,
-          });
+        // Boss throws a cluster of mines at the player
+        for (let i = 0; i < 4; i++) {
+          throwMine(e);
         }
         break;
     }
@@ -883,20 +884,37 @@ function startGame() {
         continue;
       }
 
-      // Mine fuse
+      // Mine: in flight (fuseTimer < 0) then landed (fuseTimer >= 0 counting down)
       if (b.isMine) {
-        b.fuseTimer -= dt;
-        if (b.fuseTimer <= 0) {
-          b.alive = false;
-          spawnMineExplosion(b.x, b.y);
-          if (
-            now > player.invincibleUntil &&
-            Math.abs(b.x - player.x) < 60 &&
-            Math.abs(b.y - player.y) < 60
-          ) {
-            player.hp--;
-            player.invincibleUntil = now + 1500;
-            if (player.hp <= 0) state.phase = 'gameOver';
+        if (b.fuseTimer < 0) {
+          // In flight — decelerate and move
+          b.x += b.vx * dt;
+          b.y += b.vy * dt;
+          b.vx *= (1 - 3 * dt);
+          b.vy *= (1 - 3 * dt);
+          // Land when speed is low enough
+          if (Math.abs(b.vx) < 10 && Math.abs(b.vy) < 10) {
+            b.vx = 0;
+            b.vy = 0;
+            b.fuseTimer = 2.5 + Math.random() * 1.5;
+          }
+          // Kill if it flies off screen
+          if (b.x < -20 || b.x > W + 20 || b.y > H + 20) b.alive = false;
+        } else {
+          // Landed — count down fuse
+          b.fuseTimer -= dt;
+          if (b.fuseTimer <= 0) {
+            b.alive = false;
+            spawnMineExplosion(b.x, b.y);
+            if (
+              now > player.invincibleUntil &&
+              Math.abs(b.x - player.x) < 60 &&
+              Math.abs(b.y - player.y) < 60
+            ) {
+              player.hp--;
+              player.invincibleUntil = now + 1500;
+              if (player.hp <= 0) state.phase = 'gameOver';
+            }
           }
         }
         continue;
@@ -1149,14 +1167,26 @@ function startGame() {
         ctx.fillStyle = `rgba(255,255,255,${0.3 + Math.random() * 0.2})`;
         ctx.fillRect(b.x - 2, b.y, 4, b.h);
       } else if (b.isMine) {
-        const pulse = 1 + Math.sin(b.fuseTimer * 6) * 0.2;
-        ctx.shadowColor = b.fuseTimer < 1 ? COLORS.red : COLORS.yellow;
-        ctx.shadowBlur = b.fuseTimer < 1 ? 16 : 8;
-        ctx.fillStyle = b.fuseTimer < 1 ? COLORS.red : COLORS.yellow;
         ctx.translate(b.x, b.y);
-        ctx.rotate(Math.PI / 4);
-        const s = (b.w / 2) * pulse;
-        ctx.fillRect(-s, -s, s * 2, s * 2);
+        if (b.fuseTimer < 0) {
+          // In flight — spinning, trailing
+          ctx.shadowColor = COLORS.yellow;
+          ctx.shadowBlur = 10;
+          ctx.fillStyle = COLORS.yellow;
+          const spin = performance.now() * 0.008;
+          ctx.rotate(spin);
+          const s = b.w / 2;
+          ctx.fillRect(-s, -s, s * 2, s * 2);
+        } else {
+          // Landed — pulsing diamond
+          const pulse = 1 + Math.sin(b.fuseTimer * 6) * 0.2;
+          ctx.shadowColor = b.fuseTimer < 1 ? COLORS.red : COLORS.yellow;
+          ctx.shadowBlur = b.fuseTimer < 1 ? 16 : 8;
+          ctx.fillStyle = b.fuseTimer < 1 ? COLORS.red : COLORS.yellow;
+          ctx.rotate(Math.PI / 4);
+          const s = (b.w / 2) * pulse;
+          ctx.fillRect(-s, -s, s * 2, s * 2);
+        }
       } else {
         ctx.shadowColor = COLORS.red;
         ctx.shadowBlur = 8;
