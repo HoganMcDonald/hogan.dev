@@ -4,7 +4,22 @@
 type BulletOwner = 'player' | 'enemy';
 type EnemyPattern = 'straight' | 'sine' | 'zigzag';
 type EnemyAttack = 'aimed' | 'radial' | 'laser' | 'mine';
-type Phase = 'playing' | 'waveIntro' | 'shop' | 'gameOver';
+type Phase = 'playing' | 'waveIntro' | 'shop' | 'crateOpening' | 'gameOver';
+type EnhancementType = 'homing' | 'exploding' | 'radial' | 'orbital' | 'chainLightning' | 'golden';
+
+interface EnhancementSlot {
+  type: EnhancementType;
+  level: number;
+  chance: number;
+}
+
+interface LootCrate {
+  x: number;
+  y: number;
+  vy: number;
+  alive: boolean;
+  enhancement: EnhancementType;
+}
 
 interface Player {
   x: number;
@@ -18,8 +33,7 @@ interface Player {
   shootCooldown: number;
   lastShot: number;
   maxBullets: number;
-  homingChance: number;
-  explodingChance: number;
+  enhancementSlots: (EnhancementSlot | null)[];
 }
 
 interface Bullet {
@@ -31,9 +45,11 @@ interface Bullet {
   h: number;
   alive: boolean;
   owner: BulletOwner;
-  homing: boolean;
-  exploding: boolean;
+  enhancement: EnhancementType | null;
   target?: Enemy;
+  orbitAngle: number;
+  orbitRadius: number;
+  orbitRotations: number;
   isMine: boolean;
   fuseTimer: number;
   isLaser: boolean;
@@ -105,6 +121,8 @@ interface GameState {
   wordIndex: number;
   shopSelection: number;
   bossActive: boolean;
+  pendingCrate: LootCrate | null;
+  crateSelection: number;
 }
 
 const COLORS = {
@@ -123,8 +141,10 @@ const COLORS = {
 };
 
 const BULLET_DEFAULTS = {
-  homing: false,
-  exploding: false,
+  enhancement: null as EnhancementType | null,
+  orbitAngle: 0,
+  orbitRadius: 0,
+  orbitRotations: 0,
   isMine: false,
   fuseTimer: 0,
   isLaser: false,
@@ -208,13 +228,13 @@ function startGame() {
     shootCooldown: 0.12,
     lastShot: 0,
     maxBullets: 3,
-    homingChance: 0,
-    explodingChance: 0,
+    enhancementSlots: [null, null, null],
   };
 
   const bullets: Bullet[] = [];
   const enemies: Enemy[] = [];
   const particles: Particle[] = [];
+  const lootCrates: LootCrate[] = [];
 
   // Track how many times each upgrade has been purchased for price scaling
   const purchaseCounts: Record<string, number> = {};
@@ -234,6 +254,8 @@ function startGame() {
     wordIndex: 0,
     shopSelection: 0,
     bossActive: false,
+    pendingCrate: null,
+    crateSelection: 0,
   };
 
   function enemiesShootThisWave(): boolean {
@@ -272,8 +294,47 @@ function startGame() {
     return basePrice + bought + waveInflation;
   }
 
+  const ENHANCEMENT_NAMES: Record<EnhancementType, string> = {
+    homing: 'Homing',
+    exploding: 'Exploding',
+    radial: 'Radial',
+    orbital: 'Orbital',
+    chainLightning: 'Chain Lightning',
+    golden: 'Golden',
+  };
+
+  const ENHANCEMENT_COLORS: Record<EnhancementType, string> = {
+    homing: COLORS.green,
+    exploding: COLORS.orange,
+    radial: COLORS.purple,
+    orbital: COLORS.blue,
+    chainLightning: COLORS.cyan,
+    golden: COLORS.yellow,
+  };
+
+  const ENHANCEMENT_DESCS: Record<EnhancementType, string> = {
+    homing: 'Bullets track nearest enemy',
+    exploding: 'Bullets explode on hit (80px AoE)',
+    radial: 'Fire extra angled side bullets',
+    orbital: 'Bullet orbits around you',
+    chainLightning: 'Arcs lightning to nearby enemies',
+    golden: '5x points on kill',
+  };
+
+  const ALL_ENHANCEMENTS: EnhancementType[] = ['homing', 'exploding', 'radial', 'orbital', 'chainLightning', 'golden'];
+
+  function randomEnhancementType(): EnhancementType {
+    const equipped = new Set(player.enhancementSlots.filter(Boolean).map(s => s!.type));
+    const weighted: EnhancementType[] = [];
+    for (const t of ALL_ENHANCEMENTS) {
+      const count = equipped.has(t) ? 1 : 3;
+      for (let i = 0; i < count; i++) weighted.push(t);
+    }
+    return weighted[Math.floor(Math.random() * weighted.length)];
+  }
+
   function buildShopItems(): ShopItem[] {
-    return [
+    const items: ShopItem[] = [
       {
         id: 'hp_up',
         name: '+1 Max HP',
@@ -319,29 +380,29 @@ function startGame() {
           purchaseCounts['max_bullets'] = (purchaseCounts['max_bullets'] || 0) + 1;
         },
       },
-      {
-        id: 'gun_exploding',
-        name: 'Exploding Rounds',
-        desc: `+15% chance to explode on hit (current: ${pct(player.explodingChance)})`,
-        cost: shopCost(3, 'gun_exploding'),
-        available: () => player.explodingChance < 1,
-        apply: () => {
-          player.explodingChance = Math.min(1, player.explodingChance + 0.15);
-          purchaseCounts['gun_exploding'] = (purchaseCounts['gun_exploding'] || 0) + 1;
-        },
-      },
-      {
-        id: 'gun_homing',
-        name: 'Homing Rounds',
-        desc: `+15% chance to track enemies (current: ${pct(player.homingChance)})`,
-        cost: shopCost(3, 'gun_homing'),
-        available: () => player.homingChance < 1,
-        apply: () => {
-          player.homingChance = Math.min(1, player.homingChance + 0.15);
-          purchaseCounts['gun_homing'] = (purchaseCounts['gun_homing'] || 0) + 1;
-        },
-      },
     ];
+
+    for (let i = 0; i < player.enhancementSlots.length; i++) {
+      const slot = player.enhancementSlots[i];
+      if (!slot) continue;
+      const slotId = `enhance_${i}`;
+      const isGolden = slot.type === 'golden';
+      const chanceInc = isGolden ? 0.05 : 0.10;
+      items.push({
+        id: slotId,
+        name: `${ENHANCEMENT_NAMES[slot.type]} Lv${slot.level + 1}`,
+        desc: `+${Math.round(chanceInc * 100)}% chance (current: ${pct(slot.chance)})`,
+        cost: shopCost(3 + slot.level, slotId),
+        available: () => slot.level < 5,
+        apply: () => {
+          slot.level++;
+          slot.chance = Math.min(1, slot.chance + chanceInc);
+          purchaseCounts[slotId] = (purchaseCounts[slotId] || 0) + 1;
+        },
+      });
+    }
+
+    return items;
   }
 
   let shopItems: ShopItem[] = [];
@@ -624,7 +685,38 @@ function startGame() {
     }
   }
 
-  function spawnExplosion(x: number, y: number) {
+  function killEnemy(e: Enemy, killerBullet?: Bullet) {
+    e.alive = false;
+    state.enemiesRemaining--;
+    const mult = killerBullet?.enhancement === 'golden' ? 5 : 1;
+    state.score += e.word.length * 10 * mult;
+    state.points += 1 * mult;
+    if (e.isBoss) {
+      state.bossActive = false;
+      state.points += 10 * mult;
+      spawnBossDeathEffect(e.x, e.y);
+    }
+    spawnParticles(e.x, e.y, e.word);
+    if (killerBullet?.enhancement === 'golden') {
+      for (let i = 0; i < 8; i++) {
+        particles.push({
+          x: e.x, y: e.y,
+          vx: (Math.random() - 0.5) * 200,
+          vy: (Math.random() - 0.5) * 200,
+          life: 0.6,
+          maxLife: 0.6,
+          char: '$',
+          color: COLORS.yellow,
+          size: 16,
+        });
+      }
+    }
+    if (Math.random() < (e.isBoss ? 0.5 : 0.05)) {
+      lootCrates.push({ x: e.x, y: e.y, vy: 30, alive: true, enhancement: randomEnhancementType() });
+    }
+  }
+
+  function spawnExplosion(x: number, y: number, sourceBullet?: Bullet) {
     for (let i = 0; i < 12; i++) {
       const angle = (Math.PI * 2 * i) / 12;
       particles.push({
@@ -646,16 +738,7 @@ function startGame() {
         e.hp--;
         e.hitFlash = 1;
         if (e.hp <= 0) {
-          e.alive = false;
-          state.enemiesRemaining--;
-          state.score += e.word.length * 10;
-          state.points++;
-          if (e.isBoss) {
-            state.bossActive = false;
-            state.points += 10;
-            spawnBossDeathEffect(e.x, e.y);
-          }
-          spawnParticles(e.x, e.y, e.word);
+          killEnemy(e, sourceBullet);
         }
       }
     }
@@ -756,42 +839,106 @@ function startGame() {
     return best;
   }
 
+  function rollEnhancement(): EnhancementType | null {
+    for (const slot of player.enhancementSlots) {
+      if (slot && Math.random() < slot.chance) return slot.type;
+    }
+    return null;
+  }
+
   function firePlayerBullet(now: number) {
     if (playerBulletCount() >= player.maxBullets) return;
     if (now - player.lastShot < player.shootCooldown * 1000) return;
     player.lastShot = now;
 
-    const isHoming = Math.random() < player.homingChance;
-    const isExploding = Math.random() < player.explodingChance;
-
+    const enhancement = rollEnhancement();
     const bx = player.x;
     const by = player.y - player.h / 2;
+
+    if (enhancement === 'radial') {
+      const slot = player.enhancementSlots.find(s => s?.type === 'radial');
+      const sideCount = 2 + (slot ? slot.level : 0);
+      // Fire main bullet (normal, no enhancement — radial triggers the extras)
+      bullets.push({
+        x: bx, y: by, vx: 0, vy: -600, w: 4, h: 12,
+        alive: true, owner: 'player', ...BULLET_DEFAULTS,
+      });
+      // Fire side bullets
+      const spread = Math.PI / 4;
+      for (let i = 0; i < sideCount; i++) {
+        const angle = -Math.PI / 2 + spread * ((i + 1) / (sideCount + 1) - 0.5) * 2;
+        const speed = 550;
+        bullets.push({
+          x: bx, y: by,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          w: 3, h: 8, alive: true, owner: 'player',
+          ...BULLET_DEFAULTS, enhancement: 'radial',
+        });
+      }
+      return;
+    }
+
+    if (enhancement === 'orbital') {
+      const slot = player.enhancementSlots.find(s => s?.type === 'orbital');
+      const maxRot = 2 + (slot ? slot.level * 0.5 : 0);
+      bullets.push({
+        x: bx, y: by, vx: 0, vy: 0, w: 6, h: 6,
+        alive: true, owner: 'player', ...BULLET_DEFAULTS,
+        enhancement: 'orbital',
+        orbitAngle: 0, orbitRadius: 60, orbitRotations: maxRot,
+      });
+      return;
+    }
+
+    const isHoming = enhancement === 'homing';
     const target = isHoming ? findNearestEnemy(bx, by) : undefined;
 
     bullets.push({
-      x: bx,
-      y: by,
+      x: bx, y: by,
       vx: 0,
       vy: isHoming ? -500 : -600,
       w: isHoming ? 5 : 4,
       h: isHoming ? 10 : 12,
-      alive: true,
-      owner: 'player',
-      homing: isHoming,
-      exploding: isExploding,
+      alive: true, owner: 'player',
+      ...BULLET_DEFAULTS,
+      enhancement,
       target,
-      isMine: false,
-      fuseTimer: 0,
-      isLaser: false,
-      laserLife: 0,
-      isLaserWarning: false,
-      warningTimer: 0,
-      warningX: 0,
-      warningSourceY: 0,
     });
   }
 
   function update(dt: number, now: number) {
+    // Crate opening phase
+    if (state.phase === 'crateOpening') {
+      const hasEmptySlot = player.enhancementSlots.some(s => s === null);
+      const optionCount = hasEmptySlot ? 2 : 1; // TAKE/SKIP or just SKIP
+      if (keyJustPressed['w'] || keyJustPressed['arrowup']) {
+        state.crateSelection = Math.max(0, state.crateSelection - 1);
+      }
+      if (keyJustPressed['s'] || keyJustPressed['arrowdown']) {
+        state.crateSelection = Math.min(optionCount - 1, state.crateSelection + 1);
+      }
+      if (keyJustPressed['enter'] || keyJustPressed[' ']) {
+        if (hasEmptySlot && state.crateSelection === 0) {
+          // TAKE
+          const idx = player.enhancementSlots.indexOf(null);
+          if (idx !== -1 && state.pendingCrate) {
+            const isGolden = state.pendingCrate.enhancement === 'golden';
+            player.enhancementSlots[idx] = {
+              type: state.pendingCrate.enhancement,
+              level: 1,
+              chance: isGolden ? 0.05 : 0.15,
+            };
+          }
+        }
+        // Both TAKE and SKIP clear the crate
+        state.pendingCrate = null;
+        enterShop();
+      }
+      for (const k in keyJustPressed) delete keyJustPressed[k];
+      return;
+    }
+
     // Shop phase
     if (state.phase === 'shop') {
       if (keyJustPressed['w'] || keyJustPressed['arrowup']) {
@@ -920,8 +1067,19 @@ function startGame() {
         continue;
       }
 
+      // Orbital logic
+      if (b.enhancement === 'orbital' && b.owner === 'player') {
+        const angularVelocity = 4;
+        b.orbitAngle += angularVelocity * dt;
+        b.x = player.x + Math.cos(b.orbitAngle) * b.orbitRadius;
+        b.y = player.y + Math.sin(b.orbitAngle) * b.orbitRadius;
+        const rotationsDone = b.orbitAngle / (Math.PI * 2);
+        if (rotationsDone >= b.orbitRotations) b.alive = false;
+        continue;
+      }
+
       // Homing logic (player bullets only)
-      if (b.homing && b.owner === 'player') {
+      if (b.enhancement === 'homing' && b.owner === 'player') {
         if (!b.target || !b.target.alive) b.target = findNearestEnemy(b.x, b.y);
         if (b.target) {
           const tdx = b.target.x - b.x;
@@ -1035,20 +1193,52 @@ function startGame() {
           b.alive = false;
           e.hp--;
           e.hitFlash = 1;
-          if (b.exploding) {
-            spawnExplosion(b.x, b.y);
+          if (b.enhancement === 'exploding') {
+            spawnExplosion(b.x, b.y, b);
+          }
+          if (b.enhancement === 'chainLightning') {
+            const slot = player.enhancementSlots.find(s => s?.type === 'chainLightning');
+            const arcRange = 120 + (slot ? slot.level * 20 : 0);
+            const maxChains = 1 + Math.floor((slot ? slot.level : 0) / 2);
+            let chainCount = 0;
+            const hitSet = new Set<Enemy>([e]);
+            let cx = e.x, cy = e.y;
+            while (chainCount < maxChains) {
+              let nearest: Enemy | undefined;
+              let nearDist = Infinity;
+              for (const other of enemies) {
+                if (!other.alive || hitSet.has(other)) continue;
+                const ddx = other.x - cx;
+                const ddy = other.y - cy;
+                const d = Math.sqrt(ddx * ddx + ddy * ddy);
+                if (d < arcRange && d < nearDist) {
+                  nearDist = d;
+                  nearest = other;
+                }
+              }
+              if (!nearest) break;
+              hitSet.add(nearest);
+              // Lightning arc particles
+              const steps = 6;
+              for (let s = 0; s <= steps; s++) {
+                const t = s / steps;
+                const px = cx + (nearest.x - cx) * t + (Math.random() - 0.5) * 20;
+                const py = cy + (nearest.y - cy) * t + (Math.random() - 0.5) * 20;
+                particles.push({
+                  x: px, y: py, vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40,
+                  life: 0.3, maxLife: 0.3, char: '/', color: COLORS.cyan, size: 12,
+                });
+              }
+              nearest.hp--;
+              nearest.hitFlash = 1;
+              if (nearest.hp <= 0) killEnemy(nearest, b);
+              cx = nearest.x;
+              cy = nearest.y;
+              chainCount++;
+            }
           }
           if (e.hp <= 0) {
-            e.alive = false;
-            state.enemiesRemaining--;
-            state.score += e.word.length * 10;
-            state.points++;
-            if (e.isBoss) {
-              state.bossActive = false;
-              state.points += 10;
-              spawnBossDeathEffect(e.x, e.y);
-            }
-            spawnParticles(e.x, e.y, e.word);
+            killEnemy(e, b);
           }
           break;
         }
@@ -1063,6 +1253,17 @@ function startGame() {
       p.vy += 100 * dt;
     }
 
+    // Update loot crates
+    for (const c of lootCrates) {
+      if (!c.alive) continue;
+      c.y += c.vy * dt;
+      if (c.y > H + 20) { c.alive = false; continue; }
+      if (Math.abs(c.x - player.x) < 30 && Math.abs(c.y - player.y) < 30) {
+        state.pendingCrate = c;
+        c.alive = false;
+      }
+    }
+
     // Cleanup
     for (let i = bullets.length - 1; i >= 0; i--) {
       if (!bullets[i].alive) bullets.splice(i, 1);
@@ -1072,6 +1273,9 @@ function startGame() {
     }
     for (let i = particles.length - 1; i >= 0; i--) {
       if (particles[i].life <= 0) particles.splice(i, 1);
+    }
+    for (let i = lootCrates.length - 1; i >= 0; i--) {
+      if (!lootCrates[i].alive) lootCrates.splice(i, 1);
     }
 
     // Check wave complete: all enemies spawned, none alive on screen, no enemy bullets left
@@ -1083,7 +1287,12 @@ function startGame() {
       (state.enemiesSpawned >= state.enemiesPerWave || isBossWave())
     ) {
       state.wave++;
-      enterShop();
+      if (state.pendingCrate) {
+        state.crateSelection = 0;
+        state.phase = 'crateOpening';
+      } else {
+        enterShop();
+      }
     }
 
     for (const k in keyJustPressed) delete keyJustPressed[k];
@@ -1124,24 +1333,23 @@ function startGame() {
       ctx.save();
 
       if (b.owner === 'player') {
-        if (b.homing && b.exploding) {
-          ctx.shadowColor = COLORS.yellow;
-          ctx.shadowBlur = 12;
-          ctx.fillStyle = COLORS.yellow;
-        } else if (b.exploding) {
-          ctx.shadowColor = COLORS.orange;
-          ctx.shadowBlur = 10;
-          ctx.fillStyle = COLORS.orange;
-        } else if (b.homing) {
-          ctx.shadowColor = COLORS.green;
-          ctx.shadowBlur = 10;
-          ctx.fillStyle = COLORS.green;
+        if (b.enhancement) {
+          const color = ENHANCEMENT_COLORS[b.enhancement];
+          ctx.shadowColor = color;
+          ctx.shadowBlur = b.enhancement === 'golden' ? 16 : 10;
+          ctx.fillStyle = color;
         } else {
           ctx.shadowColor = COLORS.cyan;
           ctx.shadowBlur = 8;
           ctx.fillStyle = COLORS.cyan;
         }
-        ctx.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+        if (b.enhancement === 'orbital') {
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, b.w / 2 + 1, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          ctx.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+        }
       } else if (b.isLaserWarning) {
         // Blinking warning line
         const blink = Math.sin(now * 0.02) > 0;
@@ -1339,12 +1547,22 @@ function startGame() {
     ctx.fillStyle = COLORS.yellow;
     ctx.fillText(`PTS: ${state.points}`, hudPad, hudPad + barH + 20);
 
-    if (player.homingChance > 0 || player.explodingChance > 0) {
-      ctx.fillStyle = COLORS.fgMuted;
-      const parts: string[] = [];
-      if (player.homingChance > 0) parts.push(`HMG ${pct(player.homingChance)}`);
-      if (player.explodingChance > 0) parts.push(`EXP ${pct(player.explodingChance)}`);
-      ctx.fillText(parts.join('  '), hudPad, hudPad + barH + 36);
+    const SLOT_ABBR: Record<EnhancementType, string> = {
+      homing: 'HMG', exploding: 'EXP', radial: 'RAD',
+      orbital: 'ORB', chainLightning: 'ZAP', golden: 'GLD',
+    };
+    ctx.font = '11px monospace';
+    let slotX = hudPad;
+    for (let i = 0; i < 3; i++) {
+      const slot = player.enhancementSlots[i];
+      if (slot) {
+        ctx.fillStyle = ENHANCEMENT_COLORS[slot.type];
+        ctx.fillText(`[${SLOT_ABBR[slot.type]}${slot.level}]`, slotX, hudPad + barH + 36);
+      } else {
+        ctx.fillStyle = COLORS.fgMuted;
+        ctx.fillText('[ ]', slotX, hudPad + barH + 36);
+      }
+      slotX += 50;
     }
 
     ctx.textAlign = 'right';
@@ -1377,13 +1595,22 @@ function startGame() {
     ctx.fillStyle = COLORS.yellow;
     ctx.fillText(`Points: ${state.points}`, cx, startY + 40);
 
-    if (player.homingChance > 0 || player.explodingChance > 0) {
-      ctx.font = '13px monospace';
-      ctx.fillStyle = COLORS.fgMuted;
-      const parts: string[] = [];
-      if (player.homingChance > 0) parts.push(`Homing: ${pct(player.homingChance)}`);
-      if (player.explodingChance > 0) parts.push(`Exploding: ${pct(player.explodingChance)}`);
-      ctx.fillText(parts.join('  |  '), cx, startY + 65);
+    ctx.font = '13px monospace';
+    const slotLabels: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const slot = player.enhancementSlots[i];
+      if (slot) {
+        slotLabels.push(`${ENHANCEMENT_NAMES[slot.type]} Lv${slot.level}`);
+      } else {
+        slotLabels.push('[ empty ]');
+      }
+    }
+    let slotDrawX = cx - 150;
+    for (let i = 0; i < 3; i++) {
+      const slot = player.enhancementSlots[i];
+      ctx.fillStyle = slot ? ENHANCEMENT_COLORS[slot.type] : COLORS.fgMuted;
+      ctx.textAlign = 'center';
+      ctx.fillText(slotLabels[i], slotDrawX + i * 150, startY + 65);
     }
 
     const itemStartY = startY + 90;
@@ -1503,6 +1730,101 @@ function startGame() {
     ctx.fillText('[ ENTER to restart ]', W / 2, H / 2 + 80);
   }
 
+  function drawLootCrates(now: number) {
+    for (const c of lootCrates) {
+      if (!c.alive) continue;
+      ctx.save();
+      const pulse = 1 + Math.sin(now * 0.005) * 0.15;
+      const size = 18 * pulse;
+      ctx.translate(c.x, c.y);
+      ctx.shadowColor = COLORS.yellow;
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = COLORS.yellow;
+      ctx.fillRect(-size / 2, -size / 2, size, size);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(-size / 2, -size / 2, size, size);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#000';
+      ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('?', 0, 0);
+      ctx.restore();
+    }
+  }
+
+  function drawCrateOpening() {
+    ctx.fillStyle = 'rgba(26,27,38,0.95)';
+    ctx.fillRect(0, 0, W, H);
+
+    const cx = W / 2;
+    const startY = H * 0.2;
+    const crate = state.pendingCrate;
+    if (!crate) return;
+
+    const enhType = crate.enhancement;
+    const color = ENHANCEMENT_COLORS[enhType];
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.shadowColor = COLORS.yellow;
+    ctx.shadowBlur = 20;
+    ctx.font = 'bold 24px monospace';
+    ctx.fillStyle = COLORS.yellow;
+    ctx.fillText('LOOT CRATE!', cx, startY);
+    ctx.shadowBlur = 0;
+
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 16;
+    ctx.font = 'bold 28px monospace';
+    ctx.fillStyle = color;
+    ctx.fillText(ENHANCEMENT_NAMES[enhType].toUpperCase(), cx, startY + 60);
+    ctx.shadowBlur = 0;
+
+    ctx.font = '14px monospace';
+    ctx.fillStyle = COLORS.fg;
+    ctx.fillText(ENHANCEMENT_DESCS[enhType], cx, startY + 95);
+
+    // Show current slots
+    ctx.font = '14px monospace';
+    ctx.fillStyle = COLORS.fgMuted;
+    ctx.fillText('Your Enhancement Slots:', cx, startY + 140);
+    for (let i = 0; i < 3; i++) {
+      const slot = player.enhancementSlots[i];
+      const sy = startY + 165 + i * 28;
+      if (slot) {
+        ctx.fillStyle = ENHANCEMENT_COLORS[slot.type];
+        ctx.fillText(`[${i + 1}] ${ENHANCEMENT_NAMES[slot.type]} Lv${slot.level}`, cx, sy);
+      } else {
+        ctx.fillStyle = COLORS.fgMuted;
+        ctx.fillText(`[${i + 1}] -- empty --`, cx, sy);
+      }
+    }
+
+    const hasEmpty = player.enhancementSlots.some(s => s === null);
+    const optY = startY + 270;
+    const options = hasEmpty ? ['TAKE', 'SKIP'] : ['SKIP'];
+
+    for (let i = 0; i < options.length; i++) {
+      const sel = i === state.crateSelection;
+      const y = optY + i * 40;
+      ctx.fillStyle = sel ? 'rgba(125,207,255,0.15)' : 'rgba(36,40,59,0.6)';
+      ctx.fillRect(cx - 80, y - 16, 160, 32);
+      ctx.strokeStyle = sel ? COLORS.cyan : COLORS.fgMuted;
+      ctx.lineWidth = sel ? 2 : 1;
+      ctx.strokeRect(cx - 80, y - 16, 160, 32);
+      ctx.fillStyle = sel ? COLORS.fgBright : COLORS.fgMuted;
+      ctx.font = 'bold 16px monospace';
+      ctx.fillText(options[i], cx, y);
+    }
+
+    ctx.font = '12px monospace';
+    ctx.fillStyle = COLORS.fgMuted;
+    ctx.fillText('W/S to select  |  ENTER/SPACE to confirm', cx, optY + options.length * 40 + 20);
+  }
+
   function draw(now: number) {
     ctx.clearRect(0, 0, W, H);
 
@@ -1511,9 +1833,15 @@ function startGame() {
       return;
     }
 
+    if (state.phase === 'crateOpening') {
+      drawCrateOpening();
+      return;
+    }
+
     drawPlayer(now);
     drawBullets(now);
     drawEnemies();
+    drawLootCrates(now);
     drawParticles();
     drawHUD();
 
