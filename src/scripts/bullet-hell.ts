@@ -5,7 +5,7 @@ type BulletOwner = 'player' | 'enemy';
 type EnemyPattern = 'straight' | 'sine' | 'zigzag';
 type EnemyAttack = 'aimed' | 'radial' | 'laser' | 'mine';
 type Phase = 'playing' | 'waveIntro' | 'shop' | 'crateOpening' | 'gameOver';
-type EnhancementType = 'homing' | 'exploding' | 'radial' | 'orbital' | 'chainLightning' | 'golden';
+type EnhancementType = 'homing' | 'exploding' | 'radial' | 'orbital' | 'chainLightning' | 'golden' | 'gravityWell' | 'lifeDrain';
 
 interface EnhancementSlot {
   type: EnhancementType;
@@ -56,6 +56,7 @@ interface Bullet {
   orbitAngle: number;
   orbitRadius: number;
   orbitRotations: number;
+  gravityWellLife: number;
   isMine: boolean;
   fuseTimer: number;
   isLaser: boolean;
@@ -152,6 +153,7 @@ const BULLET_DEFAULTS = {
   orbitAngle: 0,
   orbitRadius: 0,
   orbitRotations: 0,
+  gravityWellLife: 0,
   isMine: false,
   fuseTimer: 0,
   isLaser: false,
@@ -309,6 +311,8 @@ function startGame() {
     orbital: 'Orbital',
     chainLightning: 'Chain Lightning',
     golden: 'Golden',
+    gravityWell: 'Gravity Well',
+    lifeDrain: 'Life Drain',
   };
 
   const ENHANCEMENT_COLORS: Record<EnhancementType, string> = {
@@ -318,6 +322,8 @@ function startGame() {
     orbital: COLORS.blue,
     chainLightning: COLORS.cyan,
     golden: COLORS.yellow,
+    gravityWell: '#9d7cd8',
+    lifeDrain: COLORS.red,
   };
 
   const ENHANCEMENT_DESCS: Record<EnhancementType, string> = {
@@ -327,9 +333,11 @@ function startGame() {
     orbital: 'Bullet orbits around you',
     chainLightning: 'Arcs lightning to nearby enemies',
     golden: '5x points on kill',
+    gravityWell: 'Slow orb that pulls enemies in',
+    lifeDrain: 'Chance to heal on hit',
   };
 
-  const ALL_ENHANCEMENTS: EnhancementType[] = ['homing', 'exploding', 'radial', 'orbital', 'chainLightning', 'golden'];
+  const ALL_ENHANCEMENTS: EnhancementType[] = ['homing', 'exploding', 'radial', 'orbital', 'chainLightning', 'golden', 'gravityWell', 'lifeDrain'];
 
   function randomEnhancementType(): EnhancementType {
     const equipped = new Set(player.enhancementSlots.filter(Boolean).map(s => s!.type));
@@ -509,6 +517,7 @@ function startGame() {
       isBoss: true,
       bossAttackIndex: 0,
       bossAttackTimer: 0,
+      gildedTimer: 0,
     });
     // Boss counts as the remaining enemies for the wave
     state.enemiesRemaining = 1;
@@ -886,6 +895,18 @@ function startGame() {
       return;
     }
 
+    if (enhancement === 'gravityWell') {
+      const slot = player.enhancementSlots.find(s => s?.type === 'gravityWell');
+      const wellLife = 2 + (slot ? slot.level * 0.5 : 0);
+      bullets.push({
+        x: bx, y: by, vx: 0, vy: -120, w: 14, h: 14,
+        alive: true, owner: 'player', ...BULLET_DEFAULTS,
+        enhancement: 'gravityWell',
+        gravityWellLife: wellLife,
+      });
+      return;
+    }
+
     if (enhancement === 'orbital') {
       const slot = player.enhancementSlots.find(s => s?.type === 'orbital');
       const maxRot = 2 + (slot ? slot.level * 0.5 : 0);
@@ -1085,6 +1106,35 @@ function startGame() {
         continue;
       }
 
+      // Gravity well logic
+      if (b.enhancement === 'gravityWell' && b.owner === 'player') {
+        b.gravityWellLife -= dt;
+        if (b.gravityWellLife <= 0) { b.alive = false; continue; }
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        // Slow to a stop
+        b.vx *= (1 - 2 * dt);
+        b.vy *= (1 - 2 * dt);
+        // Pull enemies toward the well
+        const slot = player.enhancementSlots.find(s => s?.type === 'gravityWell');
+        const pullRadius = 100 + (slot ? slot.level * 20 : 0);
+        const pullForce = 150 + (slot ? slot.level * 30 : 0);
+        for (const e of enemies) {
+          if (!e.alive) continue;
+          const edx = b.x - e.x;
+          const edy = b.y - e.y;
+          const dist = Math.sqrt(edx * edx + edy * edy);
+          if (dist < pullRadius && dist > 5) {
+            const strength = pullForce * (1 - dist / pullRadius);
+            e.x += (edx / dist) * strength * dt;
+            e.y += (edy / dist) * strength * dt;
+            e.baseX = e.x;
+          }
+        }
+        if (b.y < -20 || b.y > H + 20) b.alive = false;
+        continue;
+      }
+
       // Homing logic (player bullets only)
       if (b.enhancement === 'homing' && b.owner === 'player') {
         if (!b.target || !b.target.alive) b.target = findNearestEnemy(b.x, b.y);
@@ -1192,6 +1242,24 @@ function startGame() {
     // Player bullet vs enemy collision
     for (const b of bullets) {
       if (!b.alive || b.owner !== 'player') continue;
+      // Gravity well: damages on contact but persists (tick-based, not instant kill)
+      if (b.enhancement === 'gravityWell') {
+        for (const e of enemies) {
+          if (!e.alive) continue;
+          if (
+            Math.abs(b.x - e.x) < (b.w + e.w) / 2 + 10 &&
+            Math.abs(b.y - e.y) < (b.h + e.h) / 2 + 10
+          ) {
+            // Damage once per ~0.5s via hitFlash guard
+            if (e.hitFlash <= 0) {
+              e.hp--;
+              e.hitFlash = 0.5;
+              if (e.hp <= 0) killEnemy(e);
+            }
+          }
+        }
+        continue;
+      }
       for (const e of enemies) {
         if (!e.alive) continue;
         if (
@@ -1247,6 +1315,20 @@ function startGame() {
               cx = nearest.x;
               cy = nearest.y;
               chainCount++;
+            }
+          }
+          if (b.enhancement === 'lifeDrain') {
+            const slot = player.enhancementSlots.find(s => s?.type === 'lifeDrain');
+            const healChance = 0.25 + (slot ? slot.level * 0.1 : 0);
+            if (Math.random() < healChance && player.hp < player.maxHp) {
+              const healAmt = (slot && slot.level >= 3 && Math.random() < 0.3) ? 2 : 1;
+              player.hp = Math.min(player.maxHp, player.hp + healAmt);
+              particles.push({
+                x: player.x, y: player.y - player.h,
+                vx: (Math.random() - 0.5) * 40, vy: -80,
+                life: 0.8, maxLife: 0.8,
+                char: `+${healAmt}`, color: COLORS.red, size: 14,
+              });
             }
           }
           if (e.hp <= 0) {
@@ -1378,6 +1460,24 @@ function startGame() {
           ctx.beginPath();
           ctx.arc(b.x, b.y, b.w / 2 + 1, 0, Math.PI * 2);
           ctx.fill();
+        } else if (b.enhancement === 'gravityWell') {
+          const pulse = 1 + Math.sin(now * 0.008) * 0.2;
+          const r = (b.w / 2 + 4) * pulse;
+          ctx.shadowBlur = 20;
+          ctx.globalAlpha = 0.3;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, r + 8, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#fff';
+          ctx.globalAlpha = 0.5;
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, r * 0.4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 1;
         } else {
           ctx.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
         }
@@ -1630,8 +1730,8 @@ function startGame() {
     ctx.fillText(`PTS: ${state.points}`, hudPad, hudPad + barH + 20);
 
     const SLOT_ABBR: Record<EnhancementType, string> = {
-      homing: 'HMG', exploding: 'EXP', radial: 'RAD',
-      orbital: 'ORB', chainLightning: 'ZAP', golden: 'GLD',
+      homing: 'HMG', exploding: 'EXP', radial: 'RAD', orbital: 'ORB',
+      chainLightning: 'ZAP', golden: 'GLD', gravityWell: 'GRV', lifeDrain: 'DRN',
     };
     ctx.font = '11px monospace';
     let slotX = hudPad;
