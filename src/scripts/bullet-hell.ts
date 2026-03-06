@@ -2,8 +2,9 @@
 // Words from the page become enemy waves in a top-down shooter
 
 type BulletOwner = 'player' | 'enemy';
-type EnemyPattern = 'straight' | 'sine' | 'zigzag';
-type EnemyAttack = 'aimed' | 'radial' | 'laser' | 'mine';
+type EnemyPattern = 'straight' | 'sine' | 'zigzag' | 'erratic';
+type EnemyAttack = 'aimed' | 'radial' | 'laser' | 'mine' | 'spiral' | 'wall';
+type EnemyType = 'normal' | 'splitter' | 'swarm' | 'cloaker';
 type Phase = 'playing' | 'waveIntro' | 'shop' | 'crateOpening' | 'gameOver' | 'paused';
 type EnhancementType = 'homing' | 'exploding' | 'radial' | 'orbital' | 'chainLightning' | 'golden' | 'gravityWell' | 'lifeDrain';
 
@@ -92,6 +93,11 @@ interface Enemy {
   bossAttackIndex: number;
   bossAttackTimer: number;
   gildedTimer: number;
+  enemyType: EnemyType;
+  isSplitterChild: boolean;
+  cloakPhase: number;
+  cloakVisible: boolean;
+  spiralAngle: number;
 }
 
 interface Particle {
@@ -315,6 +321,23 @@ function startGame() {
     return attacks[Math.floor(Math.random() * attacks.length)];
   }
 
+  function availableEnemyTypes(): EnemyType[] {
+    const types: EnemyType[] = ['normal'];
+    if (state.wave >= 5) types.push('splitter');
+    if (state.wave >= 8) types.push('swarm');
+    if (state.wave >= 11) types.push('cloaker');
+    return types;
+  }
+
+  function pickEnemyType(): EnemyType {
+    const types = availableEnemyTypes();
+    // Normal enemies are more common — weight them
+    if (types.length > 1 && Math.random() < 0.4) {
+      return types[1 + Math.floor(Math.random() * (types.length - 1))];
+    }
+    return 'normal';
+  }
+
   function isBossWave(): boolean {
     return state.wave % 10 === 0;
   }
@@ -495,9 +518,22 @@ function startGame() {
     bossAttackIndex: 0,
     bossAttackTimer: 0,
     gildedTimer: 0,
+    enemyType: 'normal' as EnemyType,
+    isSplitterChild: false,
+    cloakPhase: 0,
+    cloakVisible: true,
+    spiralAngle: 0,
   };
 
   function spawnEnemy() {
+    const enemyType = pickEnemyType();
+
+    // Swarm spawns a whole pack instead of a single enemy
+    if (enemyType === 'swarm') {
+      spawnSwarm();
+      return;
+    }
+
     const word = nextWord();
     const stats = getEnemyStats(word);
     const patterns: EnemyPattern[] = ['straight', 'sine', 'zigzag'];
@@ -509,6 +545,10 @@ function startGame() {
     const x = Math.random() * (W - ew) + ew / 2;
     const shootChance = Math.min(0.9, 0.3 + state.wave * 0.05);
     const canShoot = enemiesShootThisWave() && Math.random() < shootChance;
+
+    let hp = stats.hp;
+    if (enemyType === 'splitter') hp += 1;
+
     enemies.push({
       x,
       y: -eh,
@@ -517,8 +557,8 @@ function startGame() {
       w: ew,
       h: eh,
       word,
-      hp: stats.hp,
-      maxHp: stats.hp,
+      hp,
+      maxHp: hp,
       alive: true,
       hitFlash: 0,
       pattern,
@@ -530,7 +570,44 @@ function startGame() {
       shootTimer: 1 + Math.random() * 2,
       shootInterval: Math.max(1.5, 3 - state.wave * 0.1),
       ...ENEMY_DEFAULTS,
+      enemyType,
+      cloakPhase: enemyType === 'cloaker' ? Math.random() * Math.PI * 2 : 0,
     });
+  }
+
+  function spawnSwarm() {
+    const count = 8 + Math.floor(Math.random() * 3);
+    const clusterX = Math.random() * (W - 100) + 50;
+    const chars = ['*', '#', '~', '!', '@'];
+    for (let i = 0; i < count; i++) {
+      const x = clusterX + (Math.random() - 0.5) * 80;
+      const ch = chars[Math.floor(Math.random() * chars.length)];
+      enemies.push({
+        x,
+        y: -(Math.random() * 40),
+        vx: 0,
+        vy: 150 + state.wave * 6 + Math.random() * 60,
+        w: 16,
+        h: 16,
+        word: ch,
+        hp: 1,
+        maxHp: 1,
+        alive: true,
+        hitFlash: 0,
+        pattern: 'erratic',
+        phaseOffset: Math.random() * Math.PI * 2,
+        baseX: x,
+        time: Math.random() * 3,
+        canShoot: false,
+        attackType: 'aimed',
+        shootTimer: 99,
+        shootInterval: 99,
+        ...ENEMY_DEFAULTS,
+        enemyType: 'swarm',
+      });
+    }
+    state.enemiesSpawned += count - 1; // -1 because the caller already increments by 1
+    state.enemiesRemaining += count - 1; // -1 because startWave already counted 1
   }
 
   function spawnBoss() {
@@ -565,6 +642,11 @@ function startGame() {
       bossAttackIndex: 0,
       bossAttackTimer: 0,
       gildedTimer: 0,
+      enemyType: 'normal' as EnemyType,
+      isSplitterChild: false,
+      cloakPhase: 0,
+      cloakVisible: true,
+      spiralAngle: 0,
     });
     // Boss counts as the remaining enemies for the wave
     state.enemiesRemaining = 1;
@@ -634,6 +716,41 @@ function startGame() {
     }
   }
 
+  function fireSpiralBurst(e: Enemy) {
+    const speed = 120 + state.wave * 2;
+    for (let v = 0; v < 5; v++) {
+      const baseAngle = e.spiralAngle + v * 0.4;
+      for (let i = 0; i < 3; i++) {
+        const angle = baseAngle + (i * Math.PI * 2) / 3;
+        bullets.push({
+          x: e.x, y: e.y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          w: 5, h: 5,
+          alive: true, owner: 'enemy',
+          ...BULLET_DEFAULTS,
+        });
+      }
+    }
+    e.spiralAngle += 2.0;
+  }
+
+  function fireWall(e: Enemy) {
+    const gapX = W * 0.15 + Math.random() * W * 0.7;
+    const gapW = 70;
+    const speed = 150 + state.wave * 3;
+    for (let x = 15; x < W; x += 30) {
+      if (Math.abs(x - gapX) < gapW / 2) continue;
+      bullets.push({
+        x, y: e.y + e.h / 2,
+        vx: 0, vy: speed,
+        w: 20, h: 8,
+        alive: true, owner: 'enemy',
+        ...BULLET_DEFAULTS,
+      });
+    }
+  }
+
   function fireLaserWarning(e: Enemy) {
     // Spawn a warning indicator that blinks at the target x, then becomes a real laser
     const lx = player.x;
@@ -692,7 +809,7 @@ function startGame() {
     const dx = targetX - e.x;
     const dy = targetY - e.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    const speed = 250 + Math.random() * 100;
+    const speed = e.isBoss ? (400 + Math.random() * 150) : (250 + Math.random() * 100);
     bullets.push({
       x: e.x,
       y: e.y + e.h / 2,
@@ -714,16 +831,18 @@ function startGame() {
       case 'radial': fireRadial(e); break;
       case 'laser': fireLaserWarning(e); break;
       case 'mine': throwMine(e); break;
+      case 'spiral': case 'wall': break; // boss-only attacks
     }
   }
 
   // Boss cycles through attack patterns
-  const BOSS_ATTACKS: EnemyAttack[] = ['aimed', 'radial', 'laser', 'mine'];
+  const BOSS_ATTACKS: EnemyAttack[] = ['aimed', 'radial', 'spiral', 'laser', 'mine', 'wall'];
   function bossShoot(e: Enemy) {
     const pattern = BOSS_ATTACKS[e.bossAttackIndex % BOSS_ATTACKS.length];
     switch (pattern) {
       case 'aimed': fireAimedBurst(e); break;
       case 'radial': fireRadial(e); break;
+      case 'spiral': fireSpiralBurst(e); break;
       case 'laser':
         fireLaserWarning(e);
         // Boss fires 3 lasers spread out
@@ -744,12 +863,50 @@ function startGame() {
           throwMine(e);
         }
         break;
+      case 'wall': fireWall(e); break;
     }
+  }
+
+  function spawnSplitterChildren(parent: Enemy) {
+    const count = 2 + Math.floor(Math.random() * 2); // 2-3
+    for (let i = 0; i < count; i++) {
+      const offsetX = (i - (count - 1) / 2) * 30;
+      enemies.push({
+        x: parent.x + offsetX,
+        y: parent.y,
+        vx: 0,
+        vy: parent.vy * 1.5,
+        w: Math.max(16, parent.w - 8),
+        h: 18,
+        word: parent.word.slice(0, Math.max(2, Math.ceil(parent.word.length / 2))),
+        hp: 1,
+        maxHp: 1,
+        alive: true,
+        hitFlash: 0,
+        pattern: parent.pattern,
+        phaseOffset: Math.random() * Math.PI * 2,
+        baseX: parent.x + offsetX,
+        time: 0,
+        canShoot: false,
+        attackType: 'aimed',
+        shootTimer: 99,
+        shootInterval: 99,
+        ...ENEMY_DEFAULTS,
+        enemyType: 'splitter',
+        isSplitterChild: true,
+      });
+    }
+    state.enemiesRemaining += count;
   }
 
   function killEnemy(e: Enemy) {
     e.alive = false;
     state.enemiesRemaining--;
+
+    // Splitter parents spawn children on death
+    if (e.enemyType === 'splitter' && !e.isSplitterChild) {
+      spawnSplitterChildren(e);
+    }
     state.totalKills++;
     const gilded = e.gildedTimer > 0;
     const mult = gilded ? 5 : 1;
@@ -824,6 +981,7 @@ function startGame() {
     }
     for (const e of enemies) {
       if (!e.alive) continue;
+      if (e.enemyType === 'cloaker' && !e.cloakVisible) continue;
       const dx = e.x - x;
       const dy = e.y - y;
       if (Math.sqrt(dx * dx + dy * dy) < 80) {
@@ -1283,6 +1441,11 @@ function startGame() {
       e.hitFlash = Math.max(0, e.hitFlash - dt * 5);
       if (e.gildedTimer > 0) e.gildedTimer -= dt;
 
+      if (e.enemyType === 'cloaker') {
+        e.cloakPhase += dt * 1.5;
+        e.cloakVisible = Math.sin(e.cloakPhase) > -0.3;
+      }
+
       if (e.isBoss) {
         // Boss: move to y=80 then patrol horizontally
         if (e.y < 80) {
@@ -1310,6 +1473,11 @@ function startGame() {
           case 'zigzag':
             e.y += e.vy * dt;
             e.x = e.baseX + ((Math.floor(e.time * 2) % 2 === 0 ? 1 : -1) * 60 * (e.time % 0.5)) / 0.5;
+            break;
+          case 'erratic':
+            e.y += e.vy * dt;
+            e.x = e.baseX + Math.sin(e.time * 6 + e.phaseOffset) * 40
+                + Math.cos(e.time * 4.3 + e.phaseOffset * 2) * 25;
             break;
         }
 
@@ -1398,6 +1566,7 @@ function startGame() {
       if (b.enhancement === 'gravityWell') {
         for (const e of enemies) {
           if (!e.alive) continue;
+          if (e.enemyType === 'cloaker' && !e.cloakVisible) continue;
           if (
             Math.abs(b.x - e.x) < (b.w + e.w) / 2 + 10 &&
             Math.abs(b.y - e.y) < (b.h + e.h) / 2 + 10
@@ -1414,6 +1583,7 @@ function startGame() {
       }
       for (const e of enemies) {
         if (!e.alive) continue;
+        if (e.enemyType === 'cloaker' && !e.cloakVisible) continue;
         if (
           Math.abs(b.x - e.x) < (b.w + e.w) / 2 &&
           Math.abs(b.y - e.y) < (b.h + e.h) / 2
@@ -1765,11 +1935,36 @@ function startGame() {
         continue;
       }
 
-      // Normal enemy rendering
-      ctx.font = '16px monospace';
+      // Cloaker alpha modulation
+      if (e.enemyType === 'cloaker') {
+        const sinVal = Math.sin(e.cloakPhase);
+        if (sinVal <= -0.3) {
+          ctx.globalAlpha = 0.08;
+        } else if (sinVal < 0.2) {
+          ctx.globalAlpha = 0.3 + (sinVal + 0.3) / 0.5 * 0.7;
+        } else {
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      // Swarm rendering
+      if (e.enemyType === 'swarm') {
+        ctx.font = '10px monospace';
+      } else {
+        ctx.font = '16px monospace';
+      }
+
       let glowColor = COLORS.purple;
       let bgColor = `rgba(187,154,247,0.3)`;
-      if (e.canShoot) {
+
+      // Splitter parent gets green glow
+      if (e.enemyType === 'splitter' && !e.isSplitterChild) {
+        glowColor = COLORS.green;
+        bgColor = `rgba(158,206,106,0.3)`;
+      } else if (e.enemyType === 'swarm') {
+        glowColor = COLORS.green;
+        bgColor = `rgba(158,206,106,0.25)`;
+      } else if (e.canShoot) {
         switch (e.attackType) {
           case 'aimed':
             glowColor = COLORS.orange;
@@ -1787,6 +1982,7 @@ function startGame() {
             glowColor = COLORS.yellow;
             bgColor = `rgba(224,175,104,0.3)`;
             break;
+          case 'spiral': case 'wall': break;
         }
       }
 
@@ -1824,11 +2020,12 @@ function startGame() {
         ctx.font = '9px monospace';
         ctx.fillStyle = glowColor;
         const labels: Record<EnemyAttack, string> = {
-          aimed: 'AIM', radial: 'RAD', laser: 'LAS', mine: 'MIN',
+          aimed: 'AIM', radial: 'RAD', laser: 'LAS', mine: 'MIN', spiral: 'SPI', wall: 'WAL',
         };
         ctx.fillText(labels[e.attackType], e.x, e.y + e.h / 2 + 8);
       }
 
+      ctx.globalAlpha = 1;
       ctx.restore();
     }
   }
@@ -2036,8 +2233,11 @@ function startGame() {
     if (isBossWave()) return 'BOSS FIGHT!';
     const w = state.wave;
     if (w === 3) return 'ENEMIES ARE SHOOTING BACK!';
+    if (w === 5) return 'NEW ENEMY: SPLITTERS';
     if (w === 6) return 'NEW THREAT: RADIAL SHOTS';
+    if (w === 8) return 'NEW ENEMY: SWARM';
     if (w === 9) return 'NEW THREAT: LASER BEAMS';
+    if (w === 11) return 'NEW ENEMY: CLOAKERS';
     if (w === 12) return 'NEW THREAT: LAND MINES';
     return null;
   }
