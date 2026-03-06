@@ -1112,25 +1112,8 @@ function startGame() {
         if (b.gravityWellLife <= 0) { b.alive = false; continue; }
         b.x += b.vx * dt;
         b.y += b.vy * dt;
-        // Slow to a stop
         b.vx *= (1 - 2 * dt);
         b.vy *= (1 - 2 * dt);
-        // Pull enemies toward the well
-        const slot = player.enhancementSlots.find(s => s?.type === 'gravityWell');
-        const pullRadius = 100 + (slot ? slot.level * 20 : 0);
-        const pullForce = 150 + (slot ? slot.level * 30 : 0);
-        for (const e of enemies) {
-          if (!e.alive) continue;
-          const edx = b.x - e.x;
-          const edy = b.y - e.y;
-          const dist = Math.sqrt(edx * edx + edy * edy);
-          if (dist < pullRadius && dist > 5) {
-            const strength = pullForce * (1 - dist / pullRadius);
-            e.x += (edx / dist) * strength * dt;
-            e.y += (edy / dist) * strength * dt;
-            e.baseX = e.x;
-          }
-        }
         if (b.y < -20 || b.y > H + 20) b.alive = false;
         continue;
       }
@@ -1208,6 +1191,35 @@ function startGame() {
           e.alive = false;
           state.enemiesRemaining--;
         }
+      }
+
+      // Gravity well pull (applied after movement so it doesn't fight patterns)
+      const gravSlot = player.enhancementSlots.find(s => s?.type === 'gravityWell');
+      const pullRadius = 100 + (gravSlot ? gravSlot.level * 20 : 0);
+      const pullForce = 80 + (gravSlot ? gravSlot.level * 15 : 0);
+      let gdx = 0, gdy = 0;
+      for (const b of bullets) {
+        if (!b.alive || b.enhancement !== 'gravityWell' || b.owner !== 'player') continue;
+        const edx = b.x - e.x;
+        const edy = b.y - e.y;
+        const dist = Math.sqrt(edx * edx + edy * edy);
+        if (dist < pullRadius && dist > 10) {
+          const strength = pullForce * (1 - dist / pullRadius);
+          gdx += (edx / dist) * strength;
+          gdy += (edy / dist) * strength;
+        }
+      }
+      // Cap total pull to avoid violent jerking from multiple wells
+      const gLen = Math.sqrt(gdx * gdx + gdy * gdy);
+      const maxPull = pullForce * 1.2;
+      if (gLen > maxPull) {
+        gdx = (gdx / gLen) * maxPull;
+        gdy = (gdy / gLen) * maxPull;
+      }
+      if (gLen > 0) {
+        e.baseX += gdx * dt;
+        e.x += gdx * dt;
+        e.y += gdy * dt;
       }
 
       // Collision with player
