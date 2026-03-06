@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:hex.tech)",
+      "WebFetch(domain:reactbits.dev)",
+      "WebFetch(domain:dribbble.com)",
+      "WebSearch",
+      "WebFetch(domain:codepen.io)",
+      "WebFetch(domain:dev.to)",
+      "WebFetch(domain:aleclownes.com)",
+      "WebFetch(domain:gist.github.com)",
+      "Bash(npm run:*)",
+      "Bash(git add:*)",
+      "Bash(git reset:*)",
+      "Bash(git commit:*)",
+      "Bash(grep:*)",
+      "Bash(xargs:*)",
+      "Bash(npx astro:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git push:*)"
+    ]
+  }
+}
