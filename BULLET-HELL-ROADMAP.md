@@ -2,16 +2,16 @@
 
 ## New Enemy Types
 
-- [ ] **Splitter** — enemies that break into 2-3 smaller, faster enemies on death (like asteroids)
+- [x] **Splitter** — enemies that break into 2-3 smaller, faster enemies on death (like asteroids)
 - [ ] **Shielded** — front-facing shield that reflects bullets; must be hit from behind or sides
-- [ ] **Cloaker** — fades in/out of visibility, only damageable when visible
-- [ ] **Swarm** — tiny enemies that spawn in packs of 8-10, low HP but fast and erratic
+- [x] **Cloaker** — fades in/out of visibility, only damageable when visible
+- [x] **Swarm** — tiny enemies that spawn in packs of 8-10, low HP but fast and erratic
 - [ ] **Mimic** — disguises as a loot crate, attacks when the player gets close
 
 ## New Attack Patterns
 
-- [ ] **Spiral** — boss fires bullets in a rotating spiral pattern (classic bullet hell)
-- [ ] **Wall** — horizontal line of bullets with a small gap the player must thread through
+- [x] **Spiral** — boss fires bullets in a rotating spiral pattern (classic bullet hell)
+- [x] **Wall** — horizontal line of bullets with a small gap the player must thread through
 - [ ] **Boomerang** — projectiles that curve back toward the player after passing
 - [ ] **Shotgun** — close-range burst of bullets in a wide cone
 
