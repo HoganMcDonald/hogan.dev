@@ -711,7 +711,7 @@ function startGame() {
         });
       }
     }
-    if (Math.random() < (e.isBoss ? 0.5 : 0.05)) {
+    if (Math.random() < (e.isBoss ? 0.5 : 0.12)) {
       lootCrates.push({ x: e.x, y: e.y, vy: 30, alive: true, enhancement: randomEnhancementType() });
     }
   }
