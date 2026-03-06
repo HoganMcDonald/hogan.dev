@@ -89,6 +89,7 @@ interface Enemy {
   isBoss: boolean;
   bossAttackIndex: number;
   bossAttackTimer: number;
+  gildedTimer: number;
 }
 
 interface Particle {
@@ -332,12 +333,9 @@ function startGame() {
 
   function randomEnhancementType(): EnhancementType {
     const equipped = new Set(player.enhancementSlots.filter(Boolean).map(s => s!.type));
-    const weighted: EnhancementType[] = [];
-    for (const t of ALL_ENHANCEMENTS) {
-      const count = equipped.has(t) ? 1 : 3;
-      for (let i = 0; i < count; i++) weighted.push(t);
-    }
-    return weighted[Math.floor(Math.random() * weighted.length)];
+    const available = ALL_ENHANCEMENTS.filter(t => !equipped.has(t));
+    if (available.length === 0) return ALL_ENHANCEMENTS[Math.floor(Math.random() * ALL_ENHANCEMENTS.length)];
+    return available[Math.floor(Math.random() * available.length)];
   }
 
   function buildShopItems(): ShopItem[] {
@@ -441,6 +439,7 @@ function startGame() {
     isBoss: false,
     bossAttackIndex: 0,
     bossAttackTimer: 0,
+    gildedTimer: 0,
   };
 
   function spawnEnemy() {
@@ -692,10 +691,11 @@ function startGame() {
     }
   }
 
-  function killEnemy(e: Enemy, killerBullet?: Bullet) {
+  function killEnemy(e: Enemy) {
     e.alive = false;
     state.enemiesRemaining--;
-    const mult = killerBullet?.enhancement === 'golden' ? 5 : 1;
+    const gilded = e.gildedTimer > 0;
+    const mult = gilded ? 5 : 1;
     state.score += e.word.length * 10 * mult;
     state.points += 1 * mult;
     if (e.isBoss) {
@@ -704,7 +704,7 @@ function startGame() {
       spawnBossDeathEffect(e.x, e.y);
     }
     spawnParticles(e.x, e.y, e.word);
-    if (killerBullet?.enhancement === 'golden') {
+    if (gilded) {
       for (let i = 0; i < 8; i++) {
         particles.push({
           x: e.x, y: e.y,
@@ -723,7 +723,7 @@ function startGame() {
     }
   }
 
-  function spawnExplosion(x: number, y: number, sourceBullet?: Bullet) {
+  function spawnExplosion(x: number, y: number) {
     for (let i = 0; i < 12; i++) {
       const angle = (Math.PI * 2 * i) / 12;
       particles.push({
@@ -745,7 +745,7 @@ function startGame() {
         e.hp--;
         e.hitFlash = 1;
         if (e.hp <= 0) {
-          killEnemy(e, sourceBullet);
+          killEnemy(e);
         }
       }
     }
@@ -1113,6 +1113,7 @@ function startGame() {
       if (!e.alive) continue;
       e.time += dt;
       e.hitFlash = Math.max(0, e.hitFlash - dt * 5);
+      if (e.gildedTimer > 0) e.gildedTimer -= dt;
 
       if (e.isBoss) {
         // Boss: move to y=80 then patrol horizontally
@@ -1200,8 +1201,11 @@ function startGame() {
           b.alive = false;
           e.hp--;
           e.hitFlash = 1;
+          if (b.enhancement === 'golden') {
+            e.gildedTimer = 3;
+          }
           if (b.enhancement === 'exploding') {
-            spawnExplosion(b.x, b.y, b);
+            spawnExplosion(b.x, b.y);
           }
           if (b.enhancement === 'chainLightning') {
             const slot = player.enhancementSlots.find(s => s?.type === 'chainLightning');
@@ -1239,14 +1243,14 @@ function startGame() {
               lightningBolts.push({ segments: segs, life: 0.4, maxLife: 0.4 });
               nearest.hp--;
               nearest.hitFlash = 1;
-              if (nearest.hp <= 0) killEnemy(nearest, b);
+              if (nearest.hp <= 0) killEnemy(nearest);
               cx = nearest.x;
               cy = nearest.y;
               chainCount++;
             }
           }
           if (e.hp <= 0) {
-            killEnemy(e, b);
+            killEnemy(e);
           }
           break;
         }
@@ -1272,8 +1276,19 @@ function startGame() {
       c.y += c.vy * dt;
       if (c.y > H + 20) { c.alive = false; continue; }
       if (Math.abs(c.x - player.x) < 30 && Math.abs(c.y - player.y) < 30) {
-        state.pendingCrate = c;
         c.alive = false;
+        const allFull = player.enhancementSlots.every(s => s !== null);
+        if (allFull) {
+          const bonus = 5;
+          state.points += bonus;
+          state.score += bonus * 10;
+          particles.push({
+            x: c.x, y: c.y, vx: 0, vy: -60,
+            life: 1, maxLife: 1, char: `+${bonus}`, color: COLORS.yellow, size: 16,
+          });
+        } else {
+          state.pendingCrate = c;
+        }
       }
     }
 
@@ -1432,12 +1447,14 @@ function startGame() {
       const flash = e.hitFlash > 0;
       ctx.save();
 
+      const gilded = e.gildedTimer > 0;
+
       if (e.isBoss) {
         // Boss rendering: larger, special glow
         ctx.font = 'bold 24px monospace';
-        const glowColor = COLORS.red;
+        const glowColor = gilded ? COLORS.yellow : COLORS.red;
         ctx.shadowColor = flash ? '#fff' : glowColor;
-        ctx.shadowBlur = flash ? 30 : 16;
+        ctx.shadowBlur = flash ? 30 : gilded ? 24 : 16;
 
         // Background
         ctx.fillStyle = flash ? `rgba(255,255,255,0.3)` : `rgba(247,118,142,0.2)`;
@@ -1492,12 +1509,17 @@ function startGame() {
         }
       }
 
+      if (gilded) {
+        glowColor = COLORS.yellow;
+        bgColor = `rgba(224,175,104,0.35)`;
+      }
+
       if (flash) {
         ctx.shadowColor = COLORS.red;
         ctx.shadowBlur = 16;
       } else {
         ctx.shadowColor = glowColor;
-        ctx.shadowBlur = 6;
+        ctx.shadowBlur = gilded ? 20 : 6;
       }
       ctx.fillStyle = flash ? `rgba(247,118,142,0.5)` : bgColor;
       ctx.fillRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
