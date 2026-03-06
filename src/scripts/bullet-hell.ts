@@ -21,6 +21,12 @@ interface LootCrate {
   enhancement: EnhancementType;
 }
 
+interface LightningBolt {
+  segments: { x: number; y: number }[];
+  life: number;
+  maxLife: number;
+}
+
 interface Player {
   x: number;
   y: number;
@@ -235,6 +241,7 @@ function startGame() {
   const enemies: Enemy[] = [];
   const particles: Particle[] = [];
   const lootCrates: LootCrate[] = [];
+  const lightningBolts: LightningBolt[] = [];
 
   // Track how many times each upgrade has been purchased for price scaling
   const purchaseCounts: Record<string, number> = {};
@@ -1218,17 +1225,18 @@ function startGame() {
               }
               if (!nearest) break;
               hitSet.add(nearest);
-              // Lightning arc particles
-              const steps = 6;
-              for (let s = 0; s <= steps; s++) {
-                const t = s / steps;
-                const px = cx + (nearest.x - cx) * t + (Math.random() - 0.5) * 20;
-                const py = cy + (nearest.y - cy) * t + (Math.random() - 0.5) * 20;
-                particles.push({
-                  x: px, y: py, vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40,
-                  life: 0.3, maxLife: 0.3, char: '/', color: COLORS.cyan, size: 12,
+              // Generate jagged lightning bolt
+              const segs: { x: number; y: number }[] = [{ x: cx, y: cy }];
+              const boltSteps = 8;
+              for (let s = 1; s < boltSteps; s++) {
+                const t = s / boltSteps;
+                segs.push({
+                  x: cx + (nearest.x - cx) * t + (Math.random() - 0.5) * 30,
+                  y: cy + (nearest.y - cy) * t + (Math.random() - 0.5) * 30,
                 });
               }
+              segs.push({ x: nearest.x, y: nearest.y });
+              lightningBolts.push({ segments: segs, life: 0.4, maxLife: 0.4 });
               nearest.hp--;
               nearest.hitFlash = 1;
               if (nearest.hp <= 0) killEnemy(nearest, b);
@@ -1251,6 +1259,11 @@ function startGame() {
       p.y += p.vy * dt;
       p.life -= dt;
       p.vy += 100 * dt;
+    }
+
+    // Update lightning bolts
+    for (const bolt of lightningBolts) {
+      bolt.life -= dt;
     }
 
     // Update loot crates
@@ -1276,6 +1289,9 @@ function startGame() {
     }
     for (let i = lootCrates.length - 1; i >= 0; i--) {
       if (!lootCrates[i].alive) lootCrates.splice(i, 1);
+    }
+    for (let i = lightningBolts.length - 1; i >= 0; i--) {
+      if (lightningBolts[i].life <= 0) lightningBolts.splice(i, 1);
     }
 
     // Check wave complete: all enemies spawned, none alive on screen, no enemy bullets left
@@ -1508,6 +1524,50 @@ function startGame() {
           aimed: 'AIM', radial: 'RAD', laser: 'LAS', mine: 'MIN',
         };
         ctx.fillText(labels[e.attackType], e.x, e.y + e.h / 2 + 8);
+      }
+
+      ctx.restore();
+    }
+  }
+
+  function drawLightning() {
+    for (const bolt of lightningBolts) {
+      const t = 1 - bolt.life / bolt.maxLife; // 0 = just spawned, 1 = dead
+      // Ease-out cubic: starts bright, fades slowly
+      const alpha = 1 - t * t * t;
+      const segs = bolt.segments;
+
+      ctx.save();
+
+      // Outer glow — wide, colored
+      ctx.strokeStyle = `rgba(125,207,255,${alpha * 0.5})`;
+      ctx.lineWidth = 8;
+      ctx.shadowColor = '#7dcfff';
+      ctx.shadowBlur = 30 * alpha;
+      ctx.beginPath();
+      ctx.moveTo(segs[0].x, segs[0].y);
+      for (let i = 1; i < segs.length; i++) ctx.lineTo(segs[i].x, segs[i].y);
+      ctx.stroke();
+
+      // Core — bright white
+      ctx.strokeStyle = `rgba(255,255,255,${alpha * 0.9})`;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = '#fff';
+      ctx.shadowBlur = 16 * alpha;
+      ctx.beginPath();
+      ctx.moveTo(segs[0].x, segs[0].y);
+      for (let i = 1; i < segs.length; i++) ctx.lineTo(segs[i].x, segs[i].y);
+      ctx.stroke();
+
+      // Impact flash at endpoints (only in first ~30% of life)
+      if (t < 0.3) {
+        const flashAlpha = (1 - t / 0.3);
+        ctx.fillStyle = `rgba(255,255,255,${flashAlpha * 0.6})`;
+        ctx.shadowColor = '#7dcfff';
+        ctx.shadowBlur = 40 * flashAlpha;
+        ctx.beginPath();
+        ctx.arc(segs[segs.length - 1].x, segs[segs.length - 1].y, 10 * flashAlpha, 0, Math.PI * 2);
+        ctx.fill();
       }
 
       ctx.restore();
@@ -1842,6 +1902,7 @@ function startGame() {
     drawBullets(now);
     drawEnemies();
     drawLootCrates(now);
+    drawLightning();
     drawParticles();
     drawHUD();
 
