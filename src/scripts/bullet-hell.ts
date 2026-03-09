@@ -7,6 +7,7 @@ type BulletOwner = 'player' | 'enemy';
 type EnemyPattern = 'straight' | 'sine' | 'zigzag' | 'erratic';
 type EnemyAttack = 'aimed' | 'radial' | 'laser' | 'mine' | 'spiral' | 'wall' | 'shotgun';
 type EnemyType = 'normal' | 'splitter' | 'swarm' | 'cloaker';
+type BossType = 'classic' | 'paragraph' | 'echo' | 'cursor';
 type Phase = 'playing' | 'waveIntro' | 'shop' | 'crateOpening' | 'gameOver' | 'paused';
 type EnhancementType = 'homing' | 'exploding' | 'radial' | 'orbital' | 'chainLightning' | 'golden' | 'gravityWell' | 'lifeDrain' | 'pierce';
 
@@ -93,6 +94,8 @@ interface Enemy {
   shootTimer: number;
   shootInterval: number;
   isBoss: boolean;
+  bossType: BossType | null;
+  bossData: Record<string, any>;
   bossAttackIndex: number;
   bossAttackTimer: number;
   gildedTimer: number;
@@ -139,6 +142,8 @@ interface GameState {
   wordIndex: number;
   shopSelection: number;
   bossActive: boolean;
+  currentBossType: BossType | null;
+  replayBuffer: { x: number; y: number; shooting: boolean; time: number }[];
   pendingCrate: LootCrate | null;
   crateSelection: number;
   shakeIntensity: number;
@@ -182,6 +187,20 @@ interface AttackDef {
   introWarning?: string;
   fire: (e: Enemy) => void;
   bossFire?: (e: Enemy) => void;
+}
+
+interface BossTypeDef {
+  id: BossType;
+  unlockWave: number;
+  name: string;
+  introWarning: string;
+  spawn: () => void;
+  move: (e: Enemy, dt: number) => void;
+  attack: (e: Enemy, dt: number) => void;
+  render: (e: Enemy, ctx: CanvasRenderingContext2D) => void;
+  onKill?: (e: Enemy) => void;
+  onUpdate?: (e: Enemy, dt: number) => void;
+  canBeHit?: (e: Enemy) => boolean;
 }
 
 interface EnemyTypeDef {
@@ -348,6 +367,8 @@ function startGame() {
     wordIndex: 0,
     shopSelection: 0,
     bossActive: false,
+    currentBossType: null,
+    replayBuffer: [],
     pendingCrate: null,
     crateSelection: 0,
     shakeIntensity: 0,
@@ -411,6 +432,8 @@ function startGame() {
 
   const ENEMY_DEFAULTS = {
     isBoss: false,
+    bossType: null as BossType | null,
+    bossData: {} as Record<string, any>,
     bossAttackIndex: 0,
     bossAttackTimer: 0,
     gildedTimer: 0,
@@ -1233,33 +1256,527 @@ function startGame() {
   }
 
   // =========================================================================
-  // SPAWN / KILL / EFFECTS
+  // BOSS TYPE REGISTRY
   // =========================================================================
 
-  function spawnBoss() {
-    state.bossActive = true;
-    const bossHp = BAL.boss.hpBase + state.wave * BAL.boss.hpPerWave;
-    const bossWord = '< BOSS >';
-    ctx.font = 'bold 24px monospace';
-    const measured = ctx.measureText(bossWord);
-    const bw = measured.width + 40;
-    const bh = 40;
-    enemies.push({
-      x: W / 2, y: -bh, vx: 0, vy: BAL.boss.speed,
-      w: bw, h: bh, word: bossWord,
-      hp: bossHp, maxHp: bossHp,
+  const BOSS_TYPE_REGISTRY: Record<string, BossTypeDef> = {};
+
+  function registerBossType(def: BossTypeDef) {
+    BOSS_TYPE_REGISTRY[def.id] = def;
+  }
+
+  function makeBossEnemy(overrides: Partial<Enemy>): Enemy {
+    return {
+      x: W / 2, y: -40, vx: 0, vy: BAL.boss.speed,
+      w: 0, h: 40, word: '',
+      hp: 0, maxHp: 0,
       alive: true, hitFlash: 0,
       pattern: 'sine', phaseOffset: 0,
       baseX: W / 2, time: 0,
       canShoot: true, attackType: 'aimed',
       shootTimer: 1, shootInterval: BAL.boss.shootInterval,
-      isBoss: true, bossAttackIndex: 0, bossAttackTimer: 0,
-      gildedTimer: 0,
-      enemyType: 'normal' as EnemyType,
-      isSplitterChild: false,
-      cloakPhase: 0, cloakVisible: true,
-      spiralAngle: 0,
+      ...ENEMY_DEFAULTS,
+      isBoss: true,
+      ...overrides,
+    };
+  }
+
+  registerBossType({
+    id: 'classic',
+    unlockWave: BAL.bossTypes.classic.unlockWave,
+    name: 'BOSS',
+    introWarning: 'PREPARE YOURSELF',
+    spawn: () => {
+      const bossHp = BAL.boss.hpBase + state.wave * BAL.boss.hpPerWave;
+      const bossWord = '< BOSS >';
+      ctx.font = 'bold 24px monospace';
+      const measured = ctx.measureText(bossWord);
+      const bw = measured.width + 40;
+      enemies.push(makeBossEnemy({
+        w: bw, word: bossWord,
+        hp: bossHp, maxHp: bossHp,
+        bossType: 'classic',
+        bossData: {},
+      }));
+    },
+    move: (e, dt) => {
+      if (e.y < BAL.boss.restY) {
+        e.y += e.vy * dt;
+      } else {
+        e.y = BAL.boss.restY;
+        e.x = W / 2 + Math.sin(e.time * BAL.boss.sineSpeed) * (W * BAL.boss.sineAmplitudeRatio);
+      }
+    },
+    attack: (e, dt) => {
+      e.bossAttackTimer += dt;
+      if (e.bossAttackTimer >= BAL.boss.attackTimer) {
+        bossShoot(e);
+        e.bossAttackTimer = 0;
+        e.bossAttackIndex++;
+      }
+    },
+    render: (e, c) => {
+      const flash = e.hitFlash > 0;
+      const gilded = e.gildedTimer > 0;
+      c.font = 'bold 24px monospace';
+      const glowColor = gilded ? COLORS.yellow : COLORS.red;
+      c.shadowColor = flash ? '#fff' : glowColor;
+      c.shadowBlur = flash ? 30 : gilded ? 24 : 16;
+      c.fillStyle = flash ? 'rgba(255,255,255,0.3)' : 'rgba(247,118,142,0.2)';
+      c.fillRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
+      c.strokeStyle = flash ? '#fff' : glowColor;
+      c.lineWidth = 2;
+      c.strokeRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
+      c.fillStyle = flash ? '#fff' : COLORS.fgBright;
+      c.fillText(e.word, e.x, e.y);
+      drawBossHpBar(e, c);
+    },
+  });
+
+  function drawBossHpBar(e: Enemy, c: CanvasRenderingContext2D) {
+    const barW = Math.max(e.w, 120);
+    const barH = 6;
+    const barY = e.y - e.h / 2 - 12;
+    c.fillStyle = 'rgba(0,0,0,0.6)';
+    c.fillRect(e.x - barW / 2, barY, barW, barH);
+    const hpRatio = e.hp / e.maxHp;
+    c.fillStyle = hpRatio > 0.5 ? COLORS.red : hpRatio > 0.25 ? COLORS.orange : COLORS.yellow;
+    c.fillRect(e.x - barW / 2, barY, barW * hpRatio, barH);
+    c.strokeStyle = COLORS.fgMuted;
+    c.lineWidth = 1;
+    c.strokeRect(e.x - barW / 2, barY, barW, barH);
+  }
+
+  // --- The Paragraph ---
+
+  function scrapeParagraph(): string[] {
+    const paragraphs = document.querySelectorAll('.page-content p');
+    const candidates: string[][] = [];
+    paragraphs.forEach(p => {
+      const text = (p.textContent || '').trim();
+      const words = text.split(/\s+/).filter(w => w.length > 0);
+      if (words.length >= 5) candidates.push(words);
     });
+    if (candidates.length === 0) {
+      return ['The', 'words', 'have', 'escaped', 'the', 'page', 'and', 'formed', 'a', 'monster'];
+    }
+    const picked = candidates[Math.floor(Math.random() * candidates.length)];
+    return picked.slice(0, BAL.bossTypes.paragraph.maxWords);
+  }
+
+  interface ParagraphSegment {
+    word: string;
+    relX: number;
+    relY: number;
+    alive: boolean;
+    hp: number;
+    maxHp: number;
+  }
+
+  function layoutParagraphSegments(words: string[], segHp: number): ParagraphSegment[] {
+    const spacing = BAL.bossTypes.paragraph.segmentSpacing;
+    const rowSpacing = BAL.bossTypes.paragraph.rowSpacing;
+    const maxRowW = W * 0.7;
+    const segments: ParagraphSegment[] = [];
+    let curX = 0;
+    let curY = 0;
+    ctx.font = 'bold 16px monospace';
+    for (const word of words) {
+      const ww = ctx.measureText(word).width;
+      if (curX + ww > maxRowW && curX > 0) {
+        curX = 0;
+        curY += rowSpacing;
+      }
+      segments.push({ word, relX: curX + ww / 2, relY: curY, alive: true, hp: segHp, maxHp: segHp });
+      curX += ww + spacing;
+    }
+    // Center each row
+    const rows: number[] = [...new Set(segments.map(s => s.relY))];
+    for (const rowY of rows) {
+      const rowSegs = segments.filter(s => s.relY === rowY);
+      const lastSeg = rowSegs[rowSegs.length - 1];
+      const lastW = ctx.measureText(lastSeg.word).width;
+      const rowW = lastSeg.relX + lastW / 2;
+      const offset = -rowW / 2;
+      for (const s of rowSegs) s.relX += offset;
+    }
+    // Center vertically
+    const totalH = rows[rows.length - 1];
+    const vOffset = -totalH / 2;
+    for (const s of segments) s.relY += vOffset;
+    return segments;
+  }
+
+  registerBossType({
+    id: 'paragraph',
+    unlockWave: BAL.bossTypes.paragraph.unlockWave,
+    name: 'THE PARAGRAPH',
+    introWarning: 'THE PAGE FIGHTS BACK',
+    spawn: () => {
+      const words = scrapeParagraph();
+      const segHp = BAL.bossTypes.paragraph.segmentHpBase + Math.floor(state.wave / 5) * BAL.bossTypes.paragraph.segmentHpPerWave;
+      const segments = layoutParagraphSegments(words, segHp);
+      const totalHp = segments.reduce((sum, s) => sum + s.hp, 0);
+      const totalW = W * 0.7;
+      const totalH = 80;
+      enemies.push(makeBossEnemy({
+        w: totalW, h: totalH, word: 'THE PARAGRAPH',
+        hp: totalHp, maxHp: totalHp,
+        bossType: 'paragraph',
+        bossData: { segments, phase: 0, attackTimer: 0 },
+      }));
+    },
+    move: (e, dt) => {
+      if (e.y < BAL.boss.restY) {
+        e.y += e.vy * dt;
+      } else {
+        e.y = BAL.boss.restY;
+        const phase = e.bossData.phase || 0;
+        const speedMult = 1 + phase * BAL.bossTypes.paragraph.speedBoostPerPhase;
+        e.x = W / 2 + Math.sin(e.time * BAL.boss.sineSpeed * speedMult) * (W * BAL.boss.sineAmplitudeRatio);
+      }
+    },
+    onUpdate: (e, dt) => {
+      const segs = e.bossData.segments as ParagraphSegment[];
+      const aliveCount = segs.filter(s => s.alive).length;
+      const ratio = aliveCount / segs.length;
+      const thresholds = BAL.bossTypes.paragraph.phaseThresholds;
+      let phase = 0;
+      if (ratio <= thresholds[1]) phase = 2;
+      else if (ratio <= thresholds[0]) phase = 1;
+      e.bossData.phase = phase;
+    },
+    attack: (e, dt) => {
+      const phase = e.bossData.phase || 0;
+      const intervals = [BAL.boss.attackTimer, BAL.boss.attackTimer * 0.7, BAL.boss.attackTimer * 0.5];
+      e.bossData.attackTimer = (e.bossData.attackTimer || 0) + dt;
+      if (e.bossData.attackTimer >= intervals[phase]) {
+        e.bossData.attackTimer = 0;
+        const segs = (e.bossData.segments as ParagraphSegment[]).filter(s => s.alive);
+        if (segs.length === 0) return;
+        const seg = segs[Math.floor(Math.random() * segs.length)];
+        const sx = e.x + seg.relX;
+        const sy = e.y + seg.relY;
+        if (phase === 0) {
+          // Aimed shots from random segment
+          const angle = Math.atan2(player.y - sy, player.x - sx);
+          const speed = BAL.attacks.aimed.baseSpeed + state.wave * BAL.attacks.aimed.speedPerWave;
+          bullets.push({ x: sx, y: sy, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, w: 6, h: 6, alive: true, owner: 'enemy', ...BULLET_DEFAULTS });
+        } else if (phase === 1) {
+          // Radial burst from segment
+          const count = 6;
+          const speed = BAL.attacks.radial.baseSpeed + state.wave * BAL.attacks.radial.speedPerWave;
+          for (let i = 0; i < count; i++) {
+            const angle = (Math.PI * 2 * i) / count;
+            bullets.push({ x: sx, y: sy, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, w: 6, h: 6, alive: true, owner: 'enemy', ...BULLET_DEFAULTS });
+          }
+        } else {
+          // Spiral + aimed
+          const speed = BAL.attacks.spiral.baseSpeed + state.wave * BAL.attacks.spiral.speedPerWave;
+          for (let i = 0; i < 3; i++) {
+            const angle = e.bossData.spiralAngle || 0;
+            const a = angle + (Math.PI * 2 * i) / 3;
+            bullets.push({ x: sx, y: sy, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, w: 6, h: 6, alive: true, owner: 'enemy', ...BULLET_DEFAULTS });
+          }
+          e.bossData.spiralAngle = ((e.bossData.spiralAngle || 0) + 0.4);
+          // Also aimed
+          const aimAngle = Math.atan2(player.y - sy, player.x - sx);
+          const aimSpeed = BAL.attacks.aimed.baseSpeed + state.wave * BAL.attacks.aimed.speedPerWave;
+          bullets.push({ x: sx, y: sy, vx: Math.cos(aimAngle) * aimSpeed, vy: Math.sin(aimAngle) * aimSpeed, w: 6, h: 6, alive: true, owner: 'enemy', ...BULLET_DEFAULTS });
+        }
+      }
+    },
+    render: (e, c) => {
+      const segs = e.bossData.segments as ParagraphSegment[];
+      c.font = 'bold 16px monospace';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      for (const seg of segs) {
+        const sx = e.x + seg.relX;
+        const sy = e.y + seg.relY;
+        if (seg.alive) {
+          const hpRatio = seg.hp / seg.maxHp;
+          c.shadowColor = COLORS.red;
+          c.shadowBlur = 8;
+          c.fillStyle = hpRatio > 0.5 ? COLORS.fgBright : hpRatio > 0.25 ? COLORS.orange : COLORS.red;
+          c.fillText(seg.word, sx, sy);
+        } else {
+          c.shadowBlur = 0;
+          c.fillStyle = 'rgba(86,95,137,0.3)';
+          c.fillText(seg.word, sx, sy);
+          // Strikethrough
+          const ww = c.measureText(seg.word).width;
+          c.strokeStyle = 'rgba(86,95,137,0.4)';
+          c.lineWidth = 1;
+          c.beginPath();
+          c.moveTo(sx - ww / 2, sy);
+          c.lineTo(sx + ww / 2, sy);
+          c.stroke();
+        }
+      }
+      c.shadowBlur = 0;
+      drawBossHpBar(e, c);
+    },
+  });
+
+  // --- Echo Boss ---
+
+  registerBossType({
+    id: 'echo',
+    unlockWave: BAL.bossTypes.echo.unlockWave,
+    name: 'ECHO',
+    introWarning: 'IT LEARNS YOUR MOVES',
+    spawn: () => {
+      const bossHp = BAL.bossTypes.echo.hpBase + state.wave * BAL.bossTypes.echo.hpPerWave;
+      const bossWord = '< ECHO >';
+      ctx.font = 'bold 24px monospace';
+      const measured = ctx.measureText(bossWord);
+      const bw = measured.width + 40;
+      state.replayBuffer = [];
+      enemies.push(makeBossEnemy({
+        w: bw, word: bossWord,
+        hp: bossHp, maxHp: bossHp,
+        bossType: 'echo',
+        bossData: { phase: 'recording', recordTimer: 0, replayIndex: 0, shootTimer: 0, trail: [] as { x: number; y: number }[] },
+      }));
+    },
+    move: (e, dt) => {
+      const data = e.bossData;
+      const echoConf = BAL.bossTypes.echo;
+      if (e.y < BAL.boss.restY) {
+        e.y += e.vy * dt;
+        return;
+      }
+      if (data.phase === 'recording') {
+        // Simple sine movement during recording
+        e.y = BAL.boss.restY;
+        e.x = W / 2 + Math.sin(e.time * BAL.boss.sineSpeed) * (W * BAL.boss.sineAmplitudeRatio);
+      } else {
+        // Replaying: follow recorded player positions
+        const buf = state.replayBuffer;
+        if (buf.length > 0) {
+          const idx = Math.floor(data.replayIndex) % buf.length;
+          const entry = buf[idx];
+          const targetX = entry.x;
+          const dx = targetX - e.x;
+          const moveX = Math.sign(dx) * Math.min(Math.abs(dx), echoConf.moveSpeed * dt);
+          e.x += moveX;
+          e.y = BAL.boss.restY;
+          data.replayIndex += 60 * dt; // advance through buffer at ~60fps rate
+        }
+      }
+      // Trail for visual effect
+      const trail = data.trail as { x: number; y: number }[];
+      trail.push({ x: e.x, y: e.y });
+      if (trail.length > 20) trail.shift();
+    },
+    onUpdate: (e, dt) => {
+      const data = e.bossData;
+      if (data.phase === 'recording') {
+        data.recordTimer += dt;
+        // Record player position
+        state.replayBuffer.push({
+          x: player.x, y: player.y,
+          shooting: keys[' '] || keys['space'] || false,
+          time: e.time,
+        });
+        if (state.replayBuffer.length > BAL.bossTypes.echo.replayBufferSize) {
+          state.replayBuffer.shift();
+        }
+        if (data.recordTimer >= BAL.bossTypes.echo.replayDelay) {
+          data.phase = 'replaying';
+          data.replayIndex = 0;
+        }
+      }
+    },
+    attack: (e, dt) => {
+      const data = e.bossData;
+      data.shootTimer = (data.shootTimer || 0) + dt;
+      if (data.phase === 'recording') {
+        // Simple aimed shots during recording
+        if (data.shootTimer >= BAL.boss.attackTimer) {
+          data.shootTimer = 0;
+          const angle = Math.atan2(player.y - e.y, player.x - e.x);
+          const speed = BAL.attacks.aimed.baseSpeed + state.wave * BAL.attacks.aimed.speedPerWave;
+          bullets.push({ x: e.x, y: e.y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, w: 6, h: 6, alive: true, owner: 'enemy', ...BULLET_DEFAULTS });
+        }
+      } else {
+        // Replaying: fire when recording shows player was shooting
+        const buf = state.replayBuffer;
+        if (buf.length > 0 && data.shootTimer >= 0.15) {
+          const idx = Math.floor(data.replayIndex) % buf.length;
+          if (buf[idx].shooting) {
+            data.shootTimer = 0;
+            const angle = Math.atan2(player.y - e.y, player.x - e.x);
+            const speed = BAL.attacks.aimed.baseSpeed + state.wave * BAL.attacks.aimed.speedPerWave * 1.2;
+            bullets.push({ x: e.x, y: e.y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, w: 6, h: 6, alive: true, owner: 'enemy', ...BULLET_DEFAULTS });
+          }
+        }
+      }
+    },
+    render: (e, c) => {
+      const flash = e.hitFlash > 0;
+      const data = e.bossData;
+      const isReplaying = data.phase === 'replaying';
+
+      // Draw trail during replay
+      if (isReplaying) {
+        const trail = data.trail as { x: number; y: number }[];
+        for (let i = 0; i < trail.length; i++) {
+          const alpha = (i / trail.length) * 0.3;
+          c.fillStyle = `rgba(122,162,247,${alpha})`;
+          c.fillRect(trail[i].x - e.w / 4, trail[i].y - e.h / 4, e.w / 2, e.h / 2);
+        }
+      }
+
+      c.font = 'bold 24px monospace';
+      const baseColor = isReplaying ? COLORS.blue : COLORS.purple;
+      c.globalAlpha = isReplaying ? 0.8 : 1;
+      c.shadowColor = flash ? '#fff' : baseColor;
+      c.shadowBlur = flash ? 30 : 16;
+      c.fillStyle = flash ? 'rgba(255,255,255,0.3)' : `rgba(122,162,247,0.2)`;
+      c.fillRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
+      c.strokeStyle = flash ? '#fff' : baseColor;
+      c.lineWidth = 2;
+      c.strokeRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
+      c.fillStyle = flash ? '#fff' : COLORS.fgBright;
+      c.fillText(e.word, e.x, e.y);
+      c.globalAlpha = 1;
+      c.shadowBlur = 0;
+      drawBossHpBar(e, c);
+    },
+  });
+
+  // --- The Cursor ---
+
+  registerBossType({
+    id: 'cursor',
+    unlockWave: BAL.bossTypes.cursor.unlockWave,
+    name: 'THE CURSOR',
+    introWarning: 'CLICK. CLICK. CLICK.',
+    spawn: () => {
+      const bossHp = BAL.bossTypes.cursor.hpBase + state.wave * BAL.bossTypes.cursor.hpPerWave;
+      enemies.push(makeBossEnemy({
+        w: 30, h: 40, word: '',
+        hp: bossHp, maxHp: bossHp,
+        bossType: 'cursor',
+        bossData: { teleportTimer: 0, isTeleporting: false, targetX: 0, targetY: 0, warningTimer: 0, shootTimer: 0 },
+      }));
+    },
+    move: (e, dt) => {
+      const data = e.bossData;
+      const conf = BAL.bossTypes.cursor;
+      if (e.y < BAL.boss.restY) {
+        e.y += e.vy * dt;
+        return;
+      }
+      if (data.isTeleporting) {
+        data.warningTimer += dt;
+        if (data.warningTimer >= conf.teleportWarningDuration) {
+          // Teleport!
+          e.x = data.targetX;
+          e.y = data.targetY;
+          data.isTeleporting = false;
+          data.teleportTimer = 0;
+          // Shockwave on arrival
+          const count = conf.shockwaveBullets;
+          const speed = BAL.attacks.radial.baseSpeed + state.wave * BAL.attacks.radial.speedPerWave;
+          for (let i = 0; i < count; i++) {
+            const angle = (Math.PI * 2 * i) / count;
+            bullets.push({ x: e.x, y: e.y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, w: 8, h: 8, alive: true, owner: 'enemy', ...BULLET_DEFAULTS });
+          }
+          triggerShake(6, 0.3);
+        }
+      } else {
+        data.teleportTimer += dt;
+        if (data.teleportTimer >= conf.teleportInterval) {
+          data.isTeleporting = true;
+          data.warningTimer = 0;
+          data.targetX = Math.random() * (W - 80) + 40;
+          data.targetY = 40 + Math.random() * (H * 0.35);
+        }
+      }
+    },
+    attack: (e, dt) => {
+      const data = e.bossData;
+      if (data.isTeleporting) return;
+      if (e.y < BAL.boss.restY) return;
+      data.shootTimer = (data.shootTimer || 0) + dt;
+      if (data.shootTimer >= BAL.bossTypes.cursor.idleShootInterval) {
+        data.shootTimer = 0;
+        const angle = Math.atan2(player.y - e.y, player.x - e.x);
+        const speed = BAL.attacks.aimed.baseSpeed + state.wave * BAL.attacks.aimed.speedPerWave;
+        bullets.push({ x: e.x, y: e.y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, w: 6, h: 6, alive: true, owner: 'enemy', ...BULLET_DEFAULTS });
+      }
+    },
+    canBeHit: (e) => !e.bossData.isTeleporting,
+    render: (e, c) => {
+      const flash = e.hitFlash > 0;
+      const data = e.bossData;
+
+      // Draw teleport warning reticle
+      if (data.isTeleporting) {
+        const warningAlpha = 0.3 + Math.sin(data.warningTimer * 20) * 0.3;
+        c.strokeStyle = `rgba(247,118,142,${warningAlpha})`;
+        c.lineWidth = 2;
+        const r = 25;
+        c.beginPath();
+        c.arc(data.targetX, data.targetY, r, 0, Math.PI * 2);
+        c.stroke();
+        c.beginPath();
+        c.moveTo(data.targetX - r - 5, data.targetY);
+        c.lineTo(data.targetX + r + 5, data.targetY);
+        c.moveTo(data.targetX, data.targetY - r - 5);
+        c.lineTo(data.targetX, data.targetY + r + 5);
+        c.stroke();
+      }
+
+      // Draw cursor arrow
+      c.save();
+      c.translate(e.x, e.y);
+      const pulse = 1 + Math.sin(e.time * 4) * 0.05;
+      c.scale(pulse, pulse);
+      c.shadowColor = flash ? '#fff' : COLORS.fgBright;
+      c.shadowBlur = flash ? 20 : 8 + Math.sin(e.time * 3) * 4;
+      c.beginPath();
+      c.moveTo(0, -16);
+      c.lineTo(8, 8);
+      c.lineTo(3, 6);
+      c.lineTo(6, 16);
+      c.lineTo(2, 16);
+      c.lineTo(-1, 6);
+      c.lineTo(-6, 10);
+      c.closePath();
+      c.fillStyle = flash ? '#fff' : COLORS.fgBright;
+      c.fill();
+      c.strokeStyle = '#000';
+      c.lineWidth = 1.5;
+      c.stroke();
+      c.restore();
+      c.shadowBlur = 0;
+
+      drawBossHpBar(e, c);
+    },
+  });
+
+  function pickBossType(): BossType {
+    const available = Object.values(BOSS_TYPE_REGISTRY).filter(
+      def => def.unlockWave <= state.wave,
+    );
+    const bossWaveIndex = Math.floor(state.wave / BAL.wave.bossWaveInterval) - 1;
+    return available[bossWaveIndex % available.length].id;
+  }
+
+  // =========================================================================
+  // SPAWN / KILL / EFFECTS
+  // =========================================================================
+
+  function spawnBoss() {
+    state.bossActive = true;
+    const bossType = pickBossType();
+    state.currentBossType = bossType;
+    const def = BOSS_TYPE_REGISTRY[bossType];
+    def.spawn();
     state.enemiesRemaining = 1;
     state.enemiesSpawned = state.enemiesPerWave;
   }
@@ -1283,7 +1800,12 @@ function startGame() {
 
     if (e.isBoss) {
       state.bossActive = false;
+      state.currentBossType = null;
       state.points += BAL.boss.killPoints * mult;
+      if (e.bossType) {
+        const bossDef = BOSS_TYPE_REGISTRY[e.bossType];
+        bossDef?.onKill?.(e);
+      }
       spawnBossDeathEffect(e.x, e.y);
       triggerShake(BAL.boss.killShakeIntensity, BAL.boss.killShakeDuration);
       state.timeScale = BAL.boss.killSlowMo;
@@ -1330,8 +1852,7 @@ function startGame() {
     }
     for (const e of enemies) {
       if (!e.alive) continue;
-      const typeDef = ENEMY_TYPE_REGISTRY[e.enemyType];
-      if (typeDef?.canBeHit && !typeDef.canBeHit(e)) continue;
+      if (!canHitEnemy(e)) continue;
       if (dist(x, y, e.x, e.y) < BAL.enhancements.exploding.aoeRadius) {
         e.hp--;
         e.hitFlash = 1;
@@ -1487,6 +2008,7 @@ function startGame() {
     state.spawnInterval = Math.max(BAL.wave.minSpawnInterval, BAL.wave.baseSpawnInterval - state.wave * BAL.wave.spawnIntervalDecay);
     state.spawnTimer = 0;
     state.bossActive = false;
+    state.currentBossType = null;
   }
 
   function enterShop() {
@@ -1750,18 +2272,12 @@ function startGame() {
 
       const typeDef = ENEMY_TYPE_REGISTRY[e.enemyType];
 
-      if (e.isBoss) {
-        if (e.y < BAL.boss.restY) {
-          e.y += e.vy * dt;
-        } else {
-          e.y = BAL.boss.restY;
-          e.x = W / 2 + Math.sin(e.time * BAL.boss.sineSpeed) * (W * BAL.boss.sineAmplitudeRatio);
-        }
-        e.bossAttackTimer += dt;
-        if (e.bossAttackTimer >= BAL.boss.attackTimer) {
-          bossShoot(e);
-          e.bossAttackTimer = 0;
-          e.bossAttackIndex++;
+      if (e.isBoss && e.bossType) {
+        const bossDef = BOSS_TYPE_REGISTRY[e.bossType];
+        if (bossDef) {
+          bossDef.onUpdate?.(e, dt);
+          bossDef.move(e, dt);
+          bossDef.attack(e, dt);
         }
       } else {
         if (typeDef?.move) {
@@ -1820,6 +2336,45 @@ function startGame() {
     }
   }
 
+  function canHitEnemy(e: Enemy): boolean {
+    const typeDef = ENEMY_TYPE_REGISTRY[e.enemyType];
+    if (typeDef?.canBeHit && !typeDef.canBeHit(e)) return false;
+    if (e.isBoss && e.bossType) {
+      const bossDef = BOSS_TYPE_REGISTRY[e.bossType];
+      if (bossDef?.canBeHit && !bossDef.canBeHit(e)) return false;
+    }
+    return true;
+  }
+
+  function hitParagraphSegment(b: Bullet, e: Enemy): boolean {
+    if (e.bossType !== 'paragraph') return false;
+    const segs = e.bossData.segments as ParagraphSegment[];
+    ctx.font = 'bold 16px monospace';
+    let hitSeg: ParagraphSegment | null = null;
+    let bestDist = Infinity;
+    for (const seg of segs) {
+      if (!seg.alive) continue;
+      const sx = e.x + seg.relX;
+      const sy = e.y + seg.relY;
+      const sw = ctx.measureText(seg.word).width + 4;
+      const sh = 20;
+      if (aabb(b.x, b.y, b.w, b.h, sx, sy, sw, sh)) {
+        const d = dist(b.x, b.y, sx, sy);
+        if (d < bestDist) { bestDist = d; hitSeg = seg; }
+      }
+    }
+    if (!hitSeg) return false;
+    hitSeg.hp--;
+    if (hitSeg.hp <= 0) {
+      hitSeg.alive = false;
+      spawnParticles(e.x + hitSeg.relX, e.y + hitSeg.relY, hitSeg.word);
+    }
+    e.hp--;
+    e.hitFlash = 1;
+    if (e.hp <= 0) killEnemy(e);
+    return true;
+  }
+
   function updateCollisions(now: number) {
     // Enemy bullet vs player
     for (const b of bullets) {
@@ -1844,13 +2399,16 @@ function startGame() {
       if (b.enhancement === 'gravityWell') {
         for (const e of enemies) {
           if (!e.alive) continue;
-          const typeDef = ENEMY_TYPE_REGISTRY[e.enemyType];
-          if (typeDef?.canBeHit && !typeDef.canBeHit(e)) continue;
+          if (!canHitEnemy(e)) continue;
           if (aabb(b.x, b.y, b.w, b.h, e.x, e.y, e.w, e.h, 10)) {
             if (e.hitFlash <= 0) {
-              e.hp--;
-              e.hitFlash = 0.5;
-              if (e.hp <= 0) killEnemy(e);
+              if (e.bossType === 'paragraph') {
+                hitParagraphSegment(b, e);
+              } else {
+                e.hp--;
+                e.hitFlash = 0.5;
+                if (e.hp <= 0) killEnemy(e);
+              }
             }
           }
         }
@@ -1859,27 +2417,42 @@ function startGame() {
 
       for (const e of enemies) {
         if (!e.alive) continue;
-        const typeDef = ENEMY_TYPE_REGISTRY[e.enemyType];
-        if (typeDef?.canBeHit && !typeDef.canBeHit(e)) continue;
+        if (!canHitEnemy(e)) continue;
         if (aabb(b.x, b.y, b.w, b.h, e.x, e.y, e.w, e.h)) {
           if (b.pierceCount > 0 && e.hitFlash > 0) continue;
 
           state.bulletsHit++;
-          e.hp--;
-          e.hitFlash = 1;
 
-          if (b.enhancement) {
-            const def = ENHANCEMENT_REGISTRY[b.enhancement];
-            def?.onHit?.(b, e);
-          }
-
-          if (e.hp <= 0) killEnemy(e);
-
-          if (b.pierceCount > 0) {
-            b.pierceCount--;
+          if (e.bossType === 'paragraph') {
+            if (hitParagraphSegment(b, e)) {
+              if (b.enhancement) {
+                const def = ENHANCEMENT_REGISTRY[b.enhancement];
+                def?.onHit?.(b, e);
+              }
+              if (b.pierceCount > 0) {
+                b.pierceCount--;
+              } else {
+                b.alive = false;
+                break;
+              }
+            }
           } else {
-            b.alive = false;
-            break;
+            e.hp--;
+            e.hitFlash = 1;
+
+            if (b.enhancement) {
+              const def = ENHANCEMENT_REGISTRY[b.enhancement];
+              def?.onHit?.(b, e);
+            }
+
+            if (e.hp <= 0) killEnemy(e);
+
+            if (b.pierceCount > 0) {
+              b.pierceCount--;
+            } else {
+              b.alive = false;
+              break;
+            }
           }
         }
       }
@@ -2120,29 +2693,11 @@ function startGame() {
 
       const gilded = e.gildedTimer > 0;
 
-      if (e.isBoss) {
-        ctx.font = 'bold 24px monospace';
-        const glowColor = gilded ? COLORS.yellow : COLORS.red;
-        ctx.shadowColor = flash ? '#fff' : glowColor;
-        ctx.shadowBlur = flash ? 30 : gilded ? 24 : 16;
-        ctx.fillStyle = flash ? `rgba(255,255,255,0.3)` : `rgba(247,118,142,0.2)`;
-        ctx.fillRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
-        ctx.strokeStyle = flash ? '#fff' : glowColor;
-        ctx.lineWidth = 2;
-        ctx.strokeRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
-        ctx.fillStyle = flash ? '#fff' : COLORS.fgBright;
-        ctx.fillText(e.word, e.x, e.y);
-        const barW = e.w;
-        const barH = 6;
-        const barY = e.y - e.h / 2 - 12;
-        ctx.fillStyle = 'rgba(0,0,0,0.6)';
-        ctx.fillRect(e.x - barW / 2, barY, barW, barH);
-        const hpRatio = e.hp / e.maxHp;
-        ctx.fillStyle = hpRatio > 0.5 ? COLORS.red : hpRatio > 0.25 ? COLORS.orange : COLORS.yellow;
-        ctx.fillRect(e.x - barW / 2, barY, barW * hpRatio, barH);
-        ctx.strokeStyle = COLORS.fgMuted;
-        ctx.lineWidth = 1;
-        ctx.strokeRect(e.x - barW / 2, barY, barW, barH);
+      if (e.isBoss && e.bossType) {
+        const bossDef = BOSS_TYPE_REGISTRY[e.bossType];
+        if (bossDef) {
+          bossDef.render(e, ctx);
+        }
         ctx.restore();
         continue;
       }
@@ -2397,7 +2952,12 @@ function startGame() {
     ctx.textAlign = 'center';
     ctx.font = 'bold 16px monospace';
     ctx.fillStyle = selected ? COLORS.green : COLORS.fgMuted;
-    const nextLabel = isBossWave() ? `>> BOSS WAVE ${state.wave} >>` : `>> WAVE ${state.wave} >>`;
+    let nextLabel = `>> WAVE ${state.wave} >>`;
+    if (isBossWave()) {
+      const bt = pickBossType();
+      const bd = BOSS_TYPE_REGISTRY[bt];
+      nextLabel = bd ? `>> ${bd.name} - WAVE ${state.wave} >>` : `>> BOSS WAVE ${state.wave} >>`;
+    }
     ctx.fillText(nextLabel, cx, contY + 22);
 
     ctx.font = '12px monospace';
@@ -2407,7 +2967,11 @@ function startGame() {
   }
 
   function waveIntroWarning(): string | null {
-    if (isBossWave()) return 'BOSS FIGHT!';
+    if (isBossWave()) {
+      const bossType = pickBossType();
+      const def = BOSS_TYPE_REGISTRY[bossType];
+      return def ? def.introWarning : 'PREPARE YOURSELF';
+    }
     const w = state.wave;
     if (w === 3) return 'ENEMIES ARE SHOOTING BACK!';
     for (const def of Object.values(ENEMY_TYPE_REGISTRY)) {
@@ -2428,19 +2992,20 @@ function startGame() {
     ctx.shadowBlur = isBoss ? 30 : 20;
     ctx.font = `bold ${isBoss ? 40 : 32}px monospace`;
     ctx.fillStyle = isBoss ? COLORS.red : COLORS.cyan;
-    ctx.fillText(isBoss ? `BOSS - WAVE ${state.wave}` : `WAVE ${state.wave}`, W / 2, H / 2 - 40);
+    if (isBoss) {
+      const bossType = pickBossType();
+      const bossDef = BOSS_TYPE_REGISTRY[bossType];
+      ctx.fillText(bossDef ? `${bossDef.name} - WAVE ${state.wave}` : `BOSS - WAVE ${state.wave}`, W / 2, H / 2 - 40);
+    } else {
+      ctx.fillText(`WAVE ${state.wave}`, W / 2, H / 2 - 40);
+    }
     ctx.shadowBlur = 0;
 
     const warning = waveIntroWarning();
-    if (warning && !isBoss) {
+    if (warning) {
       ctx.font = '14px monospace';
       ctx.fillStyle = COLORS.orange;
       ctx.fillText(warning, W / 2, H / 2);
-    }
-    if (isBoss) {
-      ctx.font = '14px monospace';
-      ctx.fillStyle = COLORS.orange;
-      ctx.fillText('PREPARE YOURSELF', W / 2, H / 2);
     }
 
     ctx.font = '14px monospace';
