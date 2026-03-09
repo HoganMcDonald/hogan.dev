@@ -3,10 +3,10 @@
 
 type BulletOwner = 'player' | 'enemy';
 type EnemyPattern = 'straight' | 'sine' | 'zigzag' | 'erratic';
-type EnemyAttack = 'aimed' | 'radial' | 'laser' | 'mine' | 'spiral' | 'wall';
+type EnemyAttack = 'aimed' | 'radial' | 'laser' | 'mine' | 'spiral' | 'wall' | 'shotgun';
 type EnemyType = 'normal' | 'splitter' | 'swarm' | 'cloaker';
 type Phase = 'playing' | 'waveIntro' | 'shop' | 'crateOpening' | 'gameOver' | 'paused';
-type EnhancementType = 'homing' | 'exploding' | 'radial' | 'orbital' | 'chainLightning' | 'golden' | 'gravityWell' | 'lifeDrain';
+type EnhancementType = 'homing' | 'exploding' | 'radial' | 'orbital' | 'chainLightning' | 'golden' | 'gravityWell' | 'lifeDrain' | 'pierce';
 
 interface EnhancementSlot {
   type: EnhancementType;
@@ -58,6 +58,7 @@ interface Bullet {
   orbitRadius: number;
   orbitRotations: number;
   gravityWellLife: number;
+  pierceCount: number;
   isMine: boolean;
   fuseTimer: number;
   isLaser: boolean;
@@ -215,6 +216,7 @@ const BULLET_DEFAULTS = {
   orbitRadius: 0,
   orbitRotations: 0,
   gravityWellLife: 0,
+  pierceCount: 0,
   isMine: false,
   fuseTimer: 0,
   isLaser: false,
@@ -709,6 +711,26 @@ function startGame() {
     },
   });
 
+  registerEnhancement({
+    id: 'pierce',
+    name: 'Pierce',
+    abbr: 'PRC',
+    desc: 'Bullets pass through enemies',
+    color: COLORS.cyan,
+    baseChance: 0.15,
+    chancePerLevel: 0.10,
+    onCreate: (b, slot) => {
+      b.pierceCount = 1 + slot.level;
+      b.h = 14;
+    },
+    onRender: (b, ctx) => {
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = COLORS.cyan;
+      ctx.fillRect(b.x - b.w / 2, b.y, b.w, b.h * 1.5);
+      ctx.globalAlpha = 1;
+    },
+  });
+
   const ALL_ENHANCEMENTS: EnhancementType[] = Object.keys(ENHANCEMENT_REGISTRY) as EnhancementType[];
 
   function randomEnhancementType(): EnhancementType {
@@ -868,6 +890,46 @@ function startGame() {
     });
   }
 
+  function fireShotgun(e: Enemy) {
+    const dx = player.x - e.x;
+    const dy = player.y - e.y;
+    const baseAngle = Math.atan2(dy, dx);
+    const count = 5;
+    const spread = Math.PI / 3;
+    const speed = 220 + state.wave * 4;
+    for (let i = 0; i < count; i++) {
+      const angle = baseAngle + spread * ((i / (count - 1)) - 0.5);
+      bullets.push({
+        x: e.x, y: e.y + e.h / 2,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        w: 5, h: 5,
+        alive: true, owner: 'enemy',
+        ...BULLET_DEFAULTS,
+      });
+    }
+  }
+
+  function fireShotgunBoss(e: Enemy) {
+    const dx = player.x - e.x;
+    const dy = player.y - e.y;
+    const baseAngle = Math.atan2(dy, dx);
+    const count = 9;
+    const spread = Math.PI / 4;
+    const speed = 260 + state.wave * 4;
+    for (let i = 0; i < count; i++) {
+      const angle = baseAngle + spread * ((i / (count - 1)) - 0.5);
+      bullets.push({
+        x: e.x, y: e.y + e.h / 2,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        w: 6, h: 6,
+        alive: true, owner: 'enemy',
+        ...BULLET_DEFAULTS,
+      });
+    }
+  }
+
   registerAttack({
     id: 'aimed',
     unlockWave: 1,
@@ -944,6 +1006,17 @@ function startGame() {
     fire: fireWall,
   });
 
+  registerAttack({
+    id: 'shotgun',
+    unlockWave: 6,
+    label: 'SHT',
+    glowColor: COLORS.red,
+    bgColor: 'rgba(247,118,142,0.3)',
+    introWarning: 'NEW THREAT: SHOTGUN BLASTS',
+    fire: fireShotgun,
+    bossFire: fireShotgunBoss,
+  });
+
   function availableAttacks(): string[] {
     return Object.keys(ATTACK_REGISTRY).filter(id => {
       const def = ATTACK_REGISTRY[id];
@@ -961,7 +1034,7 @@ function startGame() {
     if (def && !def.bossOnly) def.fire(e);
   }
 
-  const BOSS_ATTACKS: EnemyAttack[] = ['aimed', 'radial', 'spiral', 'laser', 'mine', 'wall'];
+  const BOSS_ATTACKS: EnemyAttack[] = ['aimed', 'radial', 'spiral', 'laser', 'mine', 'wall', 'shotgun'];
 
   function bossShoot(e: Enemy) {
     const attackId = BOSS_ATTACKS[e.bossAttackIndex % BOSS_ATTACKS.length];
@@ -1786,7 +1859,8 @@ function startGame() {
         const typeDef = ENEMY_TYPE_REGISTRY[e.enemyType];
         if (typeDef?.canBeHit && !typeDef.canBeHit(e)) continue;
         if (aabb(b.x, b.y, b.w, b.h, e.x, e.y, e.w, e.h)) {
-          b.alive = false;
+          if (b.pierceCount > 0 && e.hitFlash > 0) continue;
+
           state.bulletsHit++;
           e.hp--;
           e.hitFlash = 1;
@@ -1797,7 +1871,13 @@ function startGame() {
           }
 
           if (e.hp <= 0) killEnemy(e);
-          break;
+
+          if (b.pierceCount > 0) {
+            b.pierceCount--;
+          } else {
+            b.alive = false;
+            break;
+          }
         }
       }
     }
