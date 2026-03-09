@@ -32,10 +32,10 @@
 
 ## Progression & Meta
 
-- [ ] **Combo system** — kills in quick succession build a multiplier that decays over time
-- [ ] **Elite enemies** — rare glowing variants with 2x HP, unique modifiers (e.g., "Regenerating", "Bullet Sponge", "Vengeful" — fires a burst on death)
-- [ ] **Synergy bonuses** — certain enhancement combos unlock bonus effects (e.g., Homing + Chain Lightning = lightning auto-targets, Exploding + Radial = cluster bombs)
-- [ ] **Challenge waves** — special waves with modifiers like "no shooting for 5s" or "screen is dark except near player"
+- [x] **Combo system** — kills in quick succession build a multiplier that decays over time
+- [x] **Elite enemies** — rare glowing variants with 2x HP, unique modifiers (e.g., "Regenerating", "Bullet Sponge", "Vengeful" — fires a burst on death)
+- [x] **Synergy bonuses** — certain enhancement combos unlock bonus effects (e.g., Homing + Chain Lightning = lightning auto-targets, Exploding + Radial = cluster bombs)
+- [x] **Challenge waves** — special waves with modifiers like "no shooting for 5s" or "screen is dark except near player"
 
 ## Visual / Juice
 

@@ -10,6 +10,9 @@ type EnemyType = 'normal' | 'splitter' | 'swarm' | 'cloaker';
 type BossType = 'classic' | 'paragraph' | 'echo' | 'cursor';
 type Phase = 'playing' | 'waveIntro' | 'shop' | 'crateOpening' | 'gameOver' | 'paused';
 type EnhancementType = 'homing' | 'exploding' | 'radial' | 'orbital' | 'chainLightning' | 'golden' | 'gravityWell' | 'lifeDrain' | 'pierce';
+type EliteModifier = 'regenerating' | 'bulletSponge' | 'vengeful';
+type SynergyId = 'homingChainLightning' | 'explodingRadial' | 'pierceGravityWell' | 'goldenLifeDrain';
+type ChallengeModifier = 'noShoot' | 'darkness' | 'speedUp' | 'fragile' | 'bulletHell';
 
 interface EnhancementSlot {
   type: EnhancementType;
@@ -104,6 +107,8 @@ interface Enemy {
   cloakPhase: number;
   cloakVisible: boolean;
   spiralAngle: number;
+  isElite: boolean;
+  eliteModifier: EliteModifier | null;
 }
 
 interface Particle {
@@ -158,6 +163,14 @@ interface GameState {
   bulletsFired: number;
   bulletsHit: number;
   gameStartTime: number;
+  activeSynergies: Set<SynergyId>;
+  synergyNotifications: { id: SynergyId; timer: number }[];
+  challenge: {
+    active: boolean;
+    modifier: ChallengeModifier | null;
+    noShootTimer: number;
+    savedHp: number;
+  };
 }
 
 // --- Registry interfaces ---
@@ -212,6 +225,14 @@ interface EnemyTypeDef {
   move?: (e: Enemy, dt: number) => void;
   onKill?: (e: Enemy) => void;
   canBeHit?: (e: Enemy) => boolean;
+}
+
+interface SynergyDef {
+  id: SynergyId;
+  requires: [EnhancementType, EnhancementType];
+  name: string;
+  desc: string;
+  color: string;
 }
 
 // --- Constants ---
@@ -383,6 +404,9 @@ function startGame() {
     bulletsFired: 0,
     bulletsHit: 0,
     gameStartTime: performance.now(),
+    activeSynergies: new Set<SynergyId>(),
+    synergyNotifications: [],
+    challenge: { active: false, modifier: null, noShootTimer: 0, savedHp: 0 },
   };
 
   // --- Shared helpers ---
@@ -442,7 +466,78 @@ function startGame() {
     cloakPhase: 0,
     cloakVisible: true,
     spiralAngle: 0,
+    isElite: false,
+    eliteModifier: null as EliteModifier | null,
   };
+
+  // --- Combo system ---
+
+  function comboMultiplier(): number {
+    if (state.combo < BAL.combo.threshold) return 1;
+    return Math.min(BAL.combo.maxMultiplier, 1 + (state.combo - BAL.combo.threshold) * BAL.combo.multPerKill);
+  }
+
+  // --- Elite enemies ---
+
+  const ELITE_MODIFIERS: { id: EliteModifier; unlockWave: number }[] = [
+    { id: 'regenerating', unlockWave: BAL.elite.regenerating.unlockWave },
+    { id: 'bulletSponge', unlockWave: BAL.elite.bulletSponge.unlockWave },
+    { id: 'vengeful', unlockWave: BAL.elite.vengeful.unlockWave },
+  ];
+
+  function applyEliteStatus(e: Enemy) {
+    if (e.isBoss || e.isSplitterChild) return;
+    if (state.wave < BAL.elite.unlockWave) return;
+    const chance = Math.min(BAL.elite.maxChance, BAL.elite.chance + (state.wave - BAL.elite.unlockWave) * BAL.elite.chancePerWave);
+    if (Math.random() >= chance) return;
+    e.isElite = true;
+    e.hp = Math.ceil(e.hp * BAL.elite.hpMultiplier);
+    e.maxHp = e.hp;
+    const available = ELITE_MODIFIERS.filter(m => state.wave >= m.unlockWave);
+    if (available.length > 0) {
+      e.eliteModifier = available[Math.floor(Math.random() * available.length)].id;
+    }
+  }
+
+  // --- Synergy system ---
+
+  const SYNERGY_DEFS: SynergyDef[] = [
+    { id: 'homingChainLightning', requires: ['homing', 'chainLightning'], name: 'Storm Seeker', desc: 'Lightning auto-targets with extended range', color: COLORS.cyan },
+    { id: 'explodingRadial', requires: ['exploding', 'radial'], name: 'Cluster Bomb', desc: 'Explosions spawn secondary blasts', color: COLORS.orange },
+    { id: 'pierceGravityWell', requires: ['pierce', 'gravityWell'], name: 'Singularity Lance', desc: 'Gravity well pull force increased', color: COLORS.purple },
+    { id: 'goldenLifeDrain', requires: ['golden', 'lifeDrain'], name: 'Midas Touch', desc: 'Heal extra HP on gilded kills', color: COLORS.yellow },
+  ];
+
+  function recalcSynergies() {
+    const equipped = new Set(player.enhancementSlots.filter(s => s !== null).map(s => s!.type));
+    for (const syn of SYNERGY_DEFS) {
+      const active = equipped.has(syn.requires[0]) && equipped.has(syn.requires[1]);
+      const wasActive = state.activeSynergies.has(syn.id);
+      if (active && !wasActive) {
+        state.activeSynergies.add(syn.id);
+        state.synergyNotifications.push({ id: syn.id, timer: 3 });
+      } else if (!active && wasActive) {
+        state.activeSynergies.delete(syn.id);
+      }
+    }
+  }
+
+  // --- Challenge waves ---
+
+  const CHALLENGE_MODIFIERS: { id: ChallengeModifier; label: string }[] = [
+    { id: 'noShoot', label: 'NO SHOOTING for 5 seconds!' },
+    { id: 'darkness', label: 'LIGHTS OUT!' },
+    { id: 'speedUp', label: 'ENEMIES ARE FASTER!' },
+    { id: 'fragile', label: 'ONE HIT AND YOU ARE DOWN!' },
+    { id: 'bulletHell', label: 'BULLET HELL MODE!' },
+  ];
+
+  function rollChallenge(): ChallengeModifier | null {
+    if (state.wave < BAL.challenge.startWave) return null;
+    if (isBossWave()) return null;
+    if (Math.random() >= BAL.challenge.chance) return null;
+    return CHALLENGE_MODIFIERS[Math.floor(Math.random() * CHALLENGE_MODIFIERS.length)].id;
+  }
 
   function playerBulletCount(): number {
     let count = 0;
@@ -611,7 +706,8 @@ function startGame() {
     chancePerLevel: BAL.enhancements.chainLightning.chancePerLevel,
     onHit: (_b, e) => {
       const slot = player.enhancementSlots.find(s => s?.type === 'chainLightning');
-      const arcRange = BAL.enhancements.chainLightning.baseRange + (slot ? slot.level * BAL.enhancements.chainLightning.rangePerLevel : 0);
+      const synergyBonus = state.activeSynergies.has('homingChainLightning') ? BAL.synergies.homingChainLightning.autoTargetRange : 0;
+      const arcRange = BAL.enhancements.chainLightning.baseRange + (slot ? slot.level * BAL.enhancements.chainLightning.rangePerLevel : 0) + synergyBonus;
       const maxChains = BAL.enhancements.chainLightning.baseChains + Math.floor((slot ? slot.level : 0) / BAL.enhancements.chainLightning.chainsEveryNLevels);
       let chainCount = 0;
       const hitSet = new Set<Enemy>([e]);
@@ -640,7 +736,7 @@ function startGame() {
         }
         segs.push({ x: nearest.x, y: nearest.y });
         lightningBolts.push({ segments: segs, life: BAL.enhancements.chainLightning.boltLife, maxLife: BAL.enhancements.chainLightning.boltLife });
-        nearest.hp--;
+        damageEnemy(nearest);
         nearest.hitFlash = 1;
         if (nearest.hp <= 0) killEnemy(nearest);
         cx = nearest.x;
@@ -1092,10 +1188,21 @@ function startGame() {
     const measured = ctx.measureText(word);
     const ew = measured.width + 12;
     const eh = 24;
-    const shootChance = Math.min(BAL.wave.shootChanceMax, BAL.wave.shootChanceBase + state.wave * BAL.wave.shootChancePerWave);
+    let shootChance = Math.min(BAL.wave.shootChanceMax, BAL.wave.shootChanceBase + state.wave * BAL.wave.shootChancePerWave);
+    if (state.challenge.active && state.challenge.modifier === 'bulletHell') {
+      shootChance = Math.min(BAL.wave.shootChanceMax, shootChance * BAL.challenge.bulletHell.shootChanceMult);
+    }
     const canShoot = enemiesShootThisWave() && Math.random() < shootChance;
+    let speed = stats.speed;
+    if (state.challenge.active && state.challenge.modifier === 'speedUp') {
+      speed *= BAL.challenge.speedUp.enemySpeedMult;
+    }
+    let shootInterval = Math.max(BAL.wave.minShootInterval, BAL.wave.shootIntervalBase - state.wave * BAL.wave.shootIntervalDecay);
+    if (state.challenge.active && state.challenge.modifier === 'bulletHell') {
+      shootInterval *= BAL.challenge.bulletHell.shootIntervalMult;
+    }
     return {
-      x, y: -eh, vx: 0, vy: stats.speed,
+      x, y: -eh, vx: 0, vy: speed,
       w: ew, h: eh, word,
       hp: stats.hp, maxHp: stats.hp,
       alive: true, hitFlash: 0,
@@ -1103,7 +1210,7 @@ function startGame() {
       baseX: x, time: 0,
       canShoot, attackType: canShoot ? pickAttack() : 'aimed',
       shootTimer: BAL.wave.shootTimerBase + Math.random() * BAL.wave.shootTimerRandom,
-      shootInterval: Math.max(BAL.wave.minShootInterval, BAL.wave.shootIntervalBase - state.wave * BAL.wave.shootIntervalDecay),
+      shootInterval,
       ...ENEMY_DEFAULTS,
       ...overrides,
     };
@@ -1228,8 +1335,12 @@ function startGame() {
   }
 
   function spawnEnemy() {
+    const before = enemies.length;
     const typeId = pickEnemyType();
     ENEMY_TYPE_REGISTRY[typeId].spawn();
+    for (let i = before; i < enemies.length; i++) {
+      applyEliteStatus(enemies[i]);
+    }
   }
 
   function spawnSplitterChildren(parent: Enemy) {
@@ -1781,6 +1892,13 @@ function startGame() {
     state.enemiesSpawned = state.enemiesPerWave;
   }
 
+  function damageEnemy(e: Enemy, amount = 1): void {
+    const dmg = (e.isElite && e.eliteModifier === 'bulletSponge')
+      ? amount * BAL.elite.bulletSponge.damageReduction
+      : amount;
+    e.hp -= dmg;
+  }
+
   function killEnemy(e: Enemy) {
     e.alive = false;
     state.enemiesRemaining--;
@@ -1790,9 +1908,12 @@ function startGame() {
 
     state.totalKills++;
     const gilded = e.gildedTimer > 0;
-    const mult = gilded ? BAL.enhancements.golden.pointMult : 1;
-    state.score += e.word.length * BAL.timing.killScorePerChar * mult;
-    state.points += BAL.timing.killPoints * mult;
+    let mult = gilded ? BAL.enhancements.golden.pointMult : 1;
+    if (e.isElite) mult *= BAL.elite.pointMultiplier;
+    if (state.challenge.active) mult *= BAL.challenge.bonusPointMultiplier;
+    const comboMult = comboMultiplier();
+    state.score += Math.round(e.word.length * BAL.timing.killScorePerChar * mult * comboMult);
+    state.points += Math.round(BAL.timing.killPoints * mult * comboMult);
 
     state.combo++;
     state.comboTimer = BAL.timing.comboDecay;
@@ -1838,9 +1959,30 @@ function startGame() {
     if (Math.random() < (e.isBoss ? BAL.loot.bossDropChance : BAL.loot.dropChance)) {
       lootCrates.push({ x: e.x, y: e.y, vy: BAL.loot.crateSpeed, alive: true, enhancement: randomEnhancementType() });
     }
+
+    // Elite: vengeful burst on death
+    if (e.isElite && e.eliteModifier === 'vengeful') {
+      const count = BAL.elite.vengeful.burstCount;
+      const speed = BAL.elite.vengeful.burstSpeed;
+      for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 * i) / count;
+        bullets.push({
+          x: e.x, y: e.y,
+          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+          w: 6, h: 6,
+          alive: true, owner: 'enemy',
+          ...BULLET_DEFAULTS,
+        });
+      }
+    }
+
+    // Synergy: Midas Touch — heal extra on gilded kill
+    if (gilded && state.activeSynergies.has('goldenLifeDrain')) {
+      player.hp = Math.min(player.maxHp, player.hp + BAL.synergies.goldenLifeDrain.healOnKill);
+    }
   }
 
-  function spawnExplosion(x: number, y: number) {
+  function spawnExplosion(x: number, y: number, isCluster = false) {
     triggerShake(5, 0.2);
     for (let i = 0; i < 12; i++) {
       const angle = (Math.PI * 2 * i) / 12;
@@ -1850,13 +1992,25 @@ function startGame() {
         life: 0.4, maxLife: 0.4, char: '*', color: COLORS.orange, size: 14,
       });
     }
+    const radius = isCluster ? BAL.synergies.explodingRadial.clusterRadius : BAL.enhancements.exploding.aoeRadius;
     for (const e of enemies) {
       if (!e.alive) continue;
       if (!canHitEnemy(e)) continue;
-      if (dist(x, y, e.x, e.y) < BAL.enhancements.exploding.aoeRadius) {
-        e.hp--;
+      if (dist(x, y, e.x, e.y) < radius) {
+        damageEnemy(e);
         e.hitFlash = 1;
         if (e.hp <= 0) killEnemy(e);
+      }
+    }
+    // Synergy: Cluster Bomb — secondary explosions
+    if (!isCluster && state.activeSynergies.has('explodingRadial')) {
+      const count = BAL.synergies.explodingRadial.clusterCount;
+      const spread = BAL.synergies.explodingRadial.clusterSpread;
+      for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 * i) / count;
+        const cx = x + Math.cos(angle) * spread;
+        const cy = y + Math.sin(angle) * spread;
+        spawnExplosion(cx, cy, true);
       }
     }
   }
@@ -1989,6 +2143,7 @@ function startGame() {
           state.points += reward;
           player.hp = Math.min(player.maxHp, player.hp + 1);
           player.enhancementSlots[i] = null;
+          recalcSynergies();
           shopItems = buildShopItems();
         },
       });
@@ -2009,6 +2164,17 @@ function startGame() {
     state.spawnTimer = 0;
     state.bossActive = false;
     state.currentBossType = null;
+
+    // Challenge wave roll
+    const challengeMod = rollChallenge();
+    state.challenge = { active: !!challengeMod, modifier: challengeMod, noShootTimer: 0, savedHp: 0 };
+    if (challengeMod === 'noShoot') {
+      state.challenge.noShootTimer = BAL.challenge.noShoot.duration;
+    }
+    if (challengeMod === 'fragile') {
+      state.challenge.savedHp = player.hp;
+      player.hp = BAL.challenge.fragile.playerHp;
+    }
   }
 
   function enterShop() {
@@ -2120,6 +2286,7 @@ function startGame() {
             chance: def.baseChance,
           };
         }
+        recalcSynergies();
         state.pendingCrate = null;
         enterShop();
       } else if (chosen === 'REROLL') {
@@ -2185,6 +2352,7 @@ function startGame() {
   }
 
   function updatePlayerShooting(now: number) {
+    if (state.challenge.active && state.challenge.modifier === 'noShoot' && state.challenge.noShootTimer > 0) return;
     if (keys[' ']) firePlayerBullet(now);
   }
 
@@ -2270,6 +2438,11 @@ function startGame() {
       e.hitFlash = Math.max(0, e.hitFlash - dt * BAL.timing.hitFlashRate);
       if (e.gildedTimer > 0) e.gildedTimer -= dt;
 
+      // Elite: regenerating heals over time
+      if (e.isElite && e.eliteModifier === 'regenerating' && e.hp < e.maxHp) {
+        e.hp = Math.min(e.maxHp, e.hp + BAL.elite.regenerating.hpPerSecond * dt);
+      }
+
       const typeDef = ENEMY_TYPE_REGISTRY[e.enemyType];
 
       if (e.isBoss && e.bossType) {
@@ -2303,7 +2476,8 @@ function startGame() {
       // Gravity well pull (applied after movement)
       const gravSlot = player.enhancementSlots.find(s => s?.type === 'gravityWell');
       const pullRadius = BAL.enhancements.gravityWell.basePullRadius + (gravSlot ? gravSlot.level * BAL.enhancements.gravityWell.pullRadiusPerLevel : 0);
-      const pullForce = BAL.enhancements.gravityWell.basePullForce + (gravSlot ? gravSlot.level * BAL.enhancements.gravityWell.pullForcePerLevel : 0);
+      const basePull = BAL.enhancements.gravityWell.basePullForce + (gravSlot ? gravSlot.level * BAL.enhancements.gravityWell.pullForcePerLevel : 0);
+      const pullForce = state.activeSynergies.has('pierceGravityWell') ? basePull * BAL.synergies.pierceGravityWell.pullMultiplier : basePull;
       let gdx = 0, gdy = 0;
       for (const b of bullets) {
         if (!b.alive || b.enhancement !== 'gravityWell' || b.owner !== 'player') continue;
@@ -2369,7 +2543,7 @@ function startGame() {
       hitSeg.alive = false;
       spawnParticles(e.x + hitSeg.relX, e.y + hitSeg.relY, hitSeg.word);
     }
-    e.hp--;
+    damageEnemy(e);
     e.hitFlash = 1;
     if (e.hp <= 0) killEnemy(e);
     return true;
@@ -2405,7 +2579,7 @@ function startGame() {
               if (e.bossType === 'paragraph') {
                 hitParagraphSegment(b, e);
               } else {
-                e.hp--;
+                damageEnemy(e);
                 e.hitFlash = 0.5;
                 if (e.hp <= 0) killEnemy(e);
               }
@@ -2437,7 +2611,7 @@ function startGame() {
               }
             }
           } else {
-            e.hp--;
+            damageEnemy(e);
             e.hitFlash = 1;
 
             if (b.enhancement) {
@@ -2482,6 +2656,15 @@ function startGame() {
         state.comboTimer = 0;
       }
     }
+    // Challenge: noShoot countdown
+    if (state.challenge.active && state.challenge.modifier === 'noShoot' && state.challenge.noShootTimer > 0) {
+      state.challenge.noShootTimer -= rawDt;
+    }
+    // Synergy notification decay
+    for (const n of state.synergyNotifications) {
+      n.timer -= rawDt;
+    }
+    state.synergyNotifications = state.synergyNotifications.filter(n => n.timer > 0);
   }
 
   function updateEffects(dt: number) {
@@ -2542,6 +2725,12 @@ function startGame() {
       !enemyBulletsLeft &&
       (state.enemiesSpawned >= state.enemiesPerWave || isBossWave())
     ) {
+      // Restore HP after fragile challenge
+      if (state.challenge.active && state.challenge.modifier === 'fragile' && player.hp > 0) {
+        player.hp = state.challenge.savedHp;
+      }
+      state.challenge = { active: false, modifier: null, noShootTimer: 0, savedHp: 0 };
+
       state.wave++;
       if (state.pendingCrate) {
         state.crateSelection = 0;
@@ -2738,12 +2927,17 @@ function startGame() {
         bgColor = `rgba(224,175,104,0.35)`;
       }
 
+      if (e.isElite && !gilded) {
+        glowColor = COLORS.orange;
+        bgColor = `rgba(255,158,100,0.3)`;
+      }
+
       if (flash) {
         ctx.shadowColor = COLORS.red;
         ctx.shadowBlur = 16;
       } else {
         ctx.shadowColor = glowColor;
-        ctx.shadowBlur = gilded ? 20 : 6;
+        ctx.shadowBlur = e.isElite ? 24 : (gilded ? 20 : 6);
       }
       ctx.fillStyle = flash ? `rgba(247,118,142,0.5)` : bgColor;
       ctx.fillRect(e.x - e.w / 2, e.y - e.h / 2, e.w, e.h);
@@ -2768,6 +2962,13 @@ function startGame() {
         ctx.fillStyle = glowColor;
         const atkDef = ATTACK_REGISTRY[e.attackType];
         ctx.fillText(atkDef?.label ?? '', e.x, e.y + e.h / 2 + 8);
+      }
+
+      if (e.isElite && e.eliteModifier) {
+        const modLetters: Record<EliteModifier, string> = { regenerating: 'R', bulletSponge: 'S', vengeful: 'V' };
+        ctx.font = 'bold 8px monospace';
+        ctx.fillStyle = COLORS.orange;
+        ctx.fillText(modLetters[e.eliteModifier], e.x + e.w / 2 - 4, e.y - e.h / 2 - 2);
       }
 
       ctx.globalAlpha = 1;
@@ -2971,6 +3172,10 @@ function startGame() {
       const bossType = pickBossType();
       const def = BOSS_TYPE_REGISTRY[bossType];
       return def ? def.introWarning : 'PREPARE YOURSELF';
+    }
+    if (state.challenge.active && state.challenge.modifier) {
+      const cm = CHALLENGE_MODIFIERS.find(c => c.id === state.challenge.modifier);
+      if (cm) return `CHALLENGE: ${cm.label}`;
     }
     const w = state.wave;
     if (w === 3) return 'ENEMIES ARE SHOOTING BACK!';
@@ -3190,8 +3395,72 @@ function startGame() {
     ctx.shadowColor = color;
     ctx.shadowBlur = 12;
     ctx.fillStyle = color;
-    ctx.fillText(`${state.combo}x COMBO`, W / 2, 20);
+    const cm = comboMultiplier();
+    const label = cm > 1 ? `${state.combo}x COMBO (${cm.toFixed(1)}x)` : `${state.combo}x COMBO`;
+    ctx.fillText(label, W / 2, 20);
     ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  function drawChallengeHUD() {
+    if (!state.challenge.active || !state.challenge.modifier) return;
+    ctx.save();
+    // noShoot countdown
+    if (state.challenge.modifier === 'noShoot' && state.challenge.noShootTimer > 0) {
+      ctx.font = 'bold 20px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = COLORS.red;
+      ctx.shadowColor = COLORS.red;
+      ctx.shadowBlur = 15;
+      ctx.fillText(`NO SHOOT: ${Math.ceil(state.challenge.noShootTimer)}s`, W / 2, 50);
+      ctx.shadowBlur = 0;
+    }
+    // Challenge active indicator
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = COLORS.orange;
+    ctx.fillText('CHALLENGE', W - 10, 10);
+    ctx.restore();
+  }
+
+  function drawDarknessOverlay() {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-in';
+    const r = BAL.challenge.darkness.lightRadius;
+    const gradient = ctx.createRadialGradient(player.x, player.y, r * 0.3, player.x, player.y, r);
+    gradient.addColorStop(0, 'rgba(255,255,255,1)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
+  }
+
+  function drawSynergyNotifications() {
+    if (state.synergyNotifications.length === 0) return;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < state.synergyNotifications.length; i++) {
+      const n = state.synergyNotifications[i];
+      const syn = SYNERGY_DEFS.find(s => s.id === n.id);
+      if (!syn) continue;
+      const alpha = Math.min(1, n.timer);
+      ctx.globalAlpha = alpha;
+      ctx.font = 'bold 16px monospace';
+      ctx.shadowColor = syn.color;
+      ctx.shadowBlur = 15;
+      ctx.fillStyle = syn.color;
+      const y = H / 2 - 80 - i * 30;
+      ctx.fillText(`SYNERGY: ${syn.name}`, W / 2, y);
+      ctx.font = '11px monospace';
+      ctx.fillStyle = COLORS.fgBright;
+      ctx.shadowBlur = 0;
+      ctx.fillText(syn.desc, W / 2, y + 18);
+    }
+    ctx.globalAlpha = 1;
     ctx.restore();
   }
 
@@ -3254,6 +3523,21 @@ function startGame() {
       }
     }
 
+    // Active synergies
+    if (state.activeSynergies.size > 0) {
+      let synY = enhY + 25 + 3 * 22 + 10;
+      ctx.fillStyle = COLORS.fgMuted;
+      ctx.fillText('Synergies:', cx, synY);
+      for (const synId of state.activeSynergies) {
+        synY += 22;
+        const syn = SYNERGY_DEFS.find(s => s.id === synId);
+        if (syn) {
+          ctx.fillStyle = syn.color;
+          ctx.fillText(syn.name, cx, synY);
+        }
+      }
+    }
+
     ctx.font = '14px monospace';
     ctx.fillStyle = COLORS.fgMuted;
     ctx.textAlign = 'center';
@@ -3295,6 +3579,13 @@ function startGame() {
     drawComboEffects();
     drawHUD();
     drawComboHUD();
+    drawChallengeHUD();
+    drawSynergyNotifications();
+
+    // Challenge: darkness overlay
+    if (state.challenge.active && state.challenge.modifier === 'darkness' && state.phase === 'playing') {
+      drawDarknessOverlay();
+    }
 
     if (state.phase === 'waveIntro') drawWaveIntro();
     if (state.phase === 'gameOver') drawGameOver();
