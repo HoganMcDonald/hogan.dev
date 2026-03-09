@@ -32,9 +32,10 @@ Posts use frontmatter: `title`, `date`, `excerpt` (required), `tags`, `draft`, `
 
 ### Registries
 
-- **ENHANCEMENT_REGISTRY** — Player bullet enhancements (homing, exploding, radial, orbital, chainLightning, golden, gravityWell, lifeDrain). Each entry defines `onCreate`, `onUpdate`, `onHit`, `onRender` hooks.
-- **ATTACK_REGISTRY** — Enemy attack patterns (aimed, radial, laser, mine, spiral, wall). Each entry defines `fire` and optional `bossFire` functions.
+- **ENHANCEMENT_REGISTRY** — Player bullet enhancements (homing, exploding, radial, orbital, chainLightning, golden, gravityWell, lifeDrain, pierce). Each entry defines `onCreate`, `onUpdate`, `onHit`, `onRender` hooks.
+- **ATTACK_REGISTRY** — Enemy attack patterns (aimed, radial, laser, mine, spiral, wall, shotgun). Each entry defines `fire` and optional `bossFire` functions.
 - **ENEMY_TYPE_REGISTRY** — Enemy types (normal, splitter, swarm, cloaker). Each entry defines `spawn`, optional `move`, `onKill`, `canBeHit`.
+- **BOSS_TYPE_REGISTRY** — Boss types (classic, paragraph, echo, cursor). Each entry defines `spawn`, `move`, `attack`, `render` hooks, plus optional `onKill`, `onUpdate`, `canBeHit`. Bosses cycle deterministically through unlocked types by wave.
 
 ### Adding New Content
 
@@ -44,20 +45,23 @@ Posts use frontmatter: `title`, `date`, `excerpt` (required), `tags`, `draft`, `
 
 **New enemy type**: Call `registerEnemyType({ id, unlockWave, weight, spawn, ... })`. Add to `EnemyType` union.
 
+**New boss type**: Call `registerBossType({ id, unlockWave, name, introWarning, spawn, move, attack, render, ... })`. Add to `BossType` union. Add balance constants to `BAL.bossTypes`. Use `makeBossEnemy()` helper in spawn.
+
 ### Update Loop
 
 `update()` dispatches to focused subsystem functions: `updatePlayerMovement`, `updatePlayerShooting`, `updateSpawning`, `updateBullets`, `updateEnemies`, `updateCollisions`, `updateDecay`, `updateEffects`, `cleanupDead`, `checkWaveComplete`.
 
 ### Balance Constants
 
-`src/scripts/bullet-hell-balance.ts` — single `BAL` export (`as const`) containing all gameplay-affecting numbers. Organized into groups: `player`, `wave`, `enemyTiers`, `boss`, `enemyTypes`, `movement`, `enhancements`, `attacks`, `loot`, `shop`, `timing`. To adjust balance, edit values in this file — the game reads all tuning knobs from `BAL.*`. Visual/rendering values (shadow blur, particle colors, font sizes) stay inline in `bullet-hell.ts`.
+`src/scripts/bullet-hell-balance.ts` — single `BAL` export (`as const`) containing all gameplay-affecting numbers. Organized into groups: `player`, `wave`, `enemyTiers`, `boss`, `enemyTypes`, `movement`, `enhancements`, `attacks`, `bossTypes`, `loot`, `shop`, `timing`. To adjust balance, edit values in this file — the game reads all tuning knobs from `BAL.*`. Visual/rendering values (shadow blur, particle colors, font sizes) stay inline in `bullet-hell.ts`.
 
 ### Key Design Decisions
 
 - Single file, no module splitting (it's a blog script) — balance constants are the one exception
 - All functions share closure scope (no GameContext passing)
-- `BOSS_ATTACKS` array is explicit ordering, not derived from registry
+- `BOSS_ATTACKS` array is explicit ordering, not derived from registry (used by classic boss)
 - Gravity well pull stays in `updateEnemies()` (cross-cutting concern)
-- Boss spawning is explicit (`spawnBoss()`), not through enemy type registry
+- Boss spawning goes through `BOSS_TYPE_REGISTRY`; `spawnBoss()` selects type and delegates
+- Paragraph boss has custom segment-based collision in `hitParagraphSegment()`
 
 See `BULLET-HELL-ROADMAP.md` for planned features.

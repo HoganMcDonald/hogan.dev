@@ -26,9 +26,9 @@
 
 ## Boss Ideas
 
-- [ ] **The Paragraph** — a boss made of an entire paragraph from the page, each word is a segment that must be destroyed individually; attacks change as segments are destroyed
-- [ ] **Echo** — boss that copies and replays the player's movement/shot patterns from 5 seconds ago
-- [ ] **The Cursor** — boss shaped like a mouse cursor, teleports around erratically, spawns "click" shockwaves
+- [x] **The Paragraph** — a boss made of an entire paragraph from the page, each word is a segment that must be destroyed individually; attacks change as segments are destroyed
+- [x] **Echo** — boss that copies and replays the player's movement/shot patterns from 5 seconds ago
+- [x] **The Cursor** — boss shaped like a mouse cursor, teleports around erratically, spawns "click" shockwaves
 
 ## Progression & Meta
 
