@@ -270,6 +270,38 @@ export const BAL = {
     inflationDivisor: 3,
   },
 
+  bossTypes: {
+    classic: { unlockWave: 10 },
+    paragraph: {
+      unlockWave: 20,
+      segmentHpBase: 8,
+      segmentHpPerWave: 2,
+      segmentSpacing: 8,
+      rowSpacing: 30,
+      maxWords: 12,
+      phaseThresholds: [0.66, 0.33] as readonly number[],
+      speedBoostPerPhase: 0.3,
+    },
+    echo: {
+      unlockWave: 30,
+      hpBase: 40,
+      hpPerWave: 6,
+      replayDelay: 5,
+      replayBufferSize: 300,
+      moveSpeed: 280,
+    },
+    cursor: {
+      unlockWave: 40,
+      hpBase: 35,
+      hpPerWave: 5,
+      teleportInterval: 3,
+      teleportWarningDuration: 0.5,
+      shockwaveRadius: 150,
+      shockwaveBullets: 16,
+      idleShootInterval: 1.2,
+    },
+  },
+
   timing: {
     comboDecay: 3,
     hitFlashRate: 5,
