@@ -1,6 +1,8 @@
 // Bullet Hell Mini Game
 // Words from the page become enemy waves in a top-down shooter
 
+import { BAL } from './bullet-hell-balance';
+
 type BulletOwner = 'player' | 'enemy';
 type EnemyPattern = 'straight' | 'sine' | 'zigzag' | 'erratic';
 type EnemyAttack = 'aimed' | 'radial' | 'laser' | 'mine' | 'spiral' | 'wall' | 'shotgun';
@@ -311,15 +313,15 @@ function startGame() {
   const player: Player = {
     x: W / 2,
     y: H - 100,
-    w: 20,
-    h: 24,
-    hp: 5,
-    maxHp: 5,
-    speed: 320,
+    w: BAL.player.w,
+    h: BAL.player.h,
+    hp: BAL.player.hp,
+    maxHp: BAL.player.maxHp,
+    speed: BAL.player.speed,
     invincibleUntil: 0,
-    shootCooldown: 0.12,
+    shootCooldown: BAL.player.shootCooldown,
     lastShot: 0,
-    maxBullets: 3,
+    maxBullets: BAL.player.maxBullets,
     enhancementSlots: [null, null, null],
   };
 
@@ -339,9 +341,9 @@ function startGame() {
     waveTimer: 2,
     enemiesRemaining: 0,
     enemiesSpawned: 0,
-    enemiesPerWave: 6,
+    enemiesPerWave: BAL.wave.baseEnemies,
     spawnTimer: 0,
-    spawnInterval: 1.2,
+    spawnInterval: BAL.wave.baseSpawnInterval,
     wordPool: words,
     wordIndex: 0,
     shopSelection: 0,
@@ -365,15 +367,15 @@ function startGame() {
   // --- Shared helpers ---
 
   function enemiesShootThisWave(): boolean {
-    return state.wave >= 3;
+    return state.wave >= BAL.wave.shootStartWave;
   }
 
   function enemyHpBonus(): number {
-    return Math.floor(state.wave / 2);
+    return Math.floor(state.wave / BAL.wave.hpBonusDivisor);
   }
 
   function isBossWave(): boolean {
-    return state.wave % 10 === 0;
+    return state.wave % BAL.wave.bossWaveInterval === 0;
   }
 
   function pct(n: number): string {
@@ -387,7 +389,7 @@ function startGame() {
 
   function shopCost(basePrice: number, itemId: string): number {
     const bought = purchaseCounts[itemId] || 0;
-    const waveInflation = Math.floor(state.wave / 3);
+    const waveInflation = Math.floor(state.wave / BAL.shop.inflationDivisor);
     return basePrice + bought + waveInflation;
   }
 
@@ -400,10 +402,11 @@ function startGame() {
   function getEnemyStats(word: string): { hp: number; speed: number } {
     const len = word.length;
     const bonus = enemyHpBonus();
-    const speedBonus = state.wave * 4;
-    if (len <= 4) return { hp: 1 + bonus, speed: 100 + speedBonus + Math.random() * 40 };
-    if (len <= 8) return { hp: 2 + bonus, speed: 70 + speedBonus + Math.random() * 30 };
-    return { hp: 3 + bonus, speed: 50 + speedBonus + Math.random() * 20 };
+    const speedBonus = state.wave * BAL.wave.speedBonusPerWave;
+    const { short, medium, long } = BAL.enemyTiers;
+    if (len <= short.maxLength) return { hp: short.hp + bonus, speed: short.speed + speedBonus + Math.random() * short.speedRandom };
+    if (len <= medium.maxLength) return { hp: medium.hp + bonus, speed: medium.speed + speedBonus + Math.random() * medium.speedRandom };
+    return { hp: long.hp + bonus, speed: long.speed + speedBonus + Math.random() * long.speedRandom };
   }
 
   const ENEMY_DEFAULTS = {
@@ -465,12 +468,12 @@ function startGame() {
     abbr: 'HMG',
     desc: 'Bullets track nearest enemy',
     color: COLORS.green,
-    baseChance: 0.15,
-    chancePerLevel: 0.10,
+    baseChance: BAL.enhancements.homing.baseChance,
+    chancePerLevel: BAL.enhancements.homing.chancePerLevel,
     onCreate: (b) => {
-      b.vy = -500;
-      b.w = 5;
-      b.h = 10;
+      b.vy = -BAL.enhancements.homing.speed;
+      b.w = BAL.enhancements.homing.bulletW;
+      b.h = BAL.enhancements.homing.bulletH;
       b.target = findNearestEnemy(b.x, b.y);
     },
     onUpdate: (b, dt) => {
@@ -480,8 +483,8 @@ function startGame() {
         const tdy = b.target.y - b.y;
         const d = dist(b.x, b.y, b.target.x, b.target.y);
         if (d > 0) {
-          const turnRate = 8 * dt;
-          const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy) || 500;
+          const turnRate = BAL.enhancements.homing.turnRate * dt;
+          const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy) || BAL.enhancements.homing.speed;
           b.vx += (tdx / d) * speed * turnRate;
           b.vy += (tdy / d) * speed * turnRate;
           const newSpeed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
@@ -496,10 +499,10 @@ function startGame() {
     id: 'exploding',
     name: 'Exploding',
     abbr: 'EXP',
-    desc: 'Bullets explode on hit (80px AoE)',
+    desc: `Bullets explode on hit (${BAL.enhancements.exploding.aoeRadius}px AoE)`,
     color: COLORS.orange,
-    baseChance: 0.15,
-    chancePerLevel: 0.10,
+    baseChance: BAL.enhancements.exploding.baseChance,
+    chancePerLevel: BAL.enhancements.exploding.chancePerLevel,
     onHit: (b) => {
       spawnExplosion(b.x, b.y);
     },
@@ -511,8 +514,8 @@ function startGame() {
     abbr: 'RAD',
     desc: 'Fire extra angled side bullets',
     color: COLORS.purple,
-    baseChance: 0.15,
-    chancePerLevel: 0.10,
+    baseChance: BAL.enhancements.radial.baseChance,
+    chancePerLevel: BAL.enhancements.radial.chancePerLevel,
     replacesDefault: true,
     onCreate: (_b, slot) => {
       const bx = player.x;
@@ -520,14 +523,14 @@ function startGame() {
       const sideCount = 2 + slot.level;
       const result: Bullet[] = [
         {
-          x: bx, y: by, vx: 0, vy: -600, w: 4, h: 12,
+          x: bx, y: by, vx: 0, vy: -BAL.enhancements.radial.centerSpeed, w: BAL.player.bulletW, h: BAL.player.bulletH,
           alive: true, owner: 'player', ...BULLET_DEFAULTS,
         },
       ];
-      const spread = Math.PI / 4;
+      const spread = BAL.enhancements.radial.spreadAngle;
       for (let i = 0; i < sideCount; i++) {
         const angle = -Math.PI / 2 + spread * ((i + 1) / (sideCount + 1) - 0.5) * 2;
-        const speed = 550;
+        const speed = BAL.enhancements.radial.sideSpeed;
         result.push({
           x: bx, y: by,
           vx: Math.cos(angle) * speed,
@@ -546,22 +549,22 @@ function startGame() {
     abbr: 'ORB',
     desc: 'Bullet orbits around you',
     color: COLORS.blue,
-    baseChance: 0.15,
-    chancePerLevel: 0.10,
+    baseChance: BAL.enhancements.orbital.baseChance,
+    chancePerLevel: BAL.enhancements.orbital.chancePerLevel,
     replacesDefault: true,
     onCreate: (_b, slot) => {
       const bx = player.x;
       const by = player.y - player.h / 2;
-      const maxRot = 2 + slot.level * 0.5;
+      const maxRot = BAL.enhancements.orbital.baseRotations + slot.level * BAL.enhancements.orbital.rotationsPerLevel;
       return [{
         x: bx, y: by, vx: 0, vy: 0, w: 6, h: 6,
         alive: true, owner: 'player', ...BULLET_DEFAULTS,
         enhancement: 'orbital',
-        orbitAngle: 0, orbitRadius: 60, orbitRotations: maxRot,
+        orbitAngle: 0, orbitRadius: BAL.enhancements.orbital.radius, orbitRotations: maxRot,
       }];
     },
     onUpdate: (b, dt) => {
-      const angularVelocity = 4;
+      const angularVelocity = BAL.enhancements.orbital.angularVelocity;
       b.orbitAngle += angularVelocity * dt;
       b.x = player.x + Math.cos(b.orbitAngle) * b.orbitRadius;
       b.y = player.y + Math.sin(b.orbitAngle) * b.orbitRadius;
@@ -581,12 +584,12 @@ function startGame() {
     abbr: 'ZAP',
     desc: 'Arcs lightning to nearby enemies',
     color: COLORS.cyan,
-    baseChance: 0.15,
-    chancePerLevel: 0.10,
+    baseChance: BAL.enhancements.chainLightning.baseChance,
+    chancePerLevel: BAL.enhancements.chainLightning.chancePerLevel,
     onHit: (_b, e) => {
       const slot = player.enhancementSlots.find(s => s?.type === 'chainLightning');
-      const arcRange = 120 + (slot ? slot.level * 20 : 0);
-      const maxChains = 1 + Math.floor((slot ? slot.level : 0) / 2);
+      const arcRange = BAL.enhancements.chainLightning.baseRange + (slot ? slot.level * BAL.enhancements.chainLightning.rangePerLevel : 0);
+      const maxChains = BAL.enhancements.chainLightning.baseChains + Math.floor((slot ? slot.level : 0) / BAL.enhancements.chainLightning.chainsEveryNLevels);
       let chainCount = 0;
       const hitSet = new Set<Enemy>([e]);
       let cx = e.x, cy = e.y;
@@ -608,12 +611,12 @@ function startGame() {
         for (let s = 1; s < boltSteps; s++) {
           const t = s / boltSteps;
           segs.push({
-            x: cx + (nearest.x - cx) * t + (Math.random() - 0.5) * 30,
-            y: cy + (nearest.y - cy) * t + (Math.random() - 0.5) * 30,
+            x: cx + (nearest.x - cx) * t + (Math.random() - 0.5) * BAL.enhancements.chainLightning.jitter,
+            y: cy + (nearest.y - cy) * t + (Math.random() - 0.5) * BAL.enhancements.chainLightning.jitter,
           });
         }
         segs.push({ x: nearest.x, y: nearest.y });
-        lightningBolts.push({ segments: segs, life: 0.4, maxLife: 0.4 });
+        lightningBolts.push({ segments: segs, life: BAL.enhancements.chainLightning.boltLife, maxLife: BAL.enhancements.chainLightning.boltLife });
         nearest.hp--;
         nearest.hitFlash = 1;
         if (nearest.hp <= 0) killEnemy(nearest);
@@ -628,12 +631,12 @@ function startGame() {
     id: 'golden',
     name: 'Golden',
     abbr: 'GLD',
-    desc: '5x points on kill',
+    desc: `${BAL.enhancements.golden.pointMult}x points on kill`,
     color: COLORS.yellow,
-    baseChance: 0.05,
-    chancePerLevel: 0.05,
+    baseChance: BAL.enhancements.golden.baseChance,
+    chancePerLevel: BAL.enhancements.golden.chancePerLevel,
     onHit: (_b, e) => {
-      e.gildedTimer = 3;
+      e.gildedTimer = BAL.enhancements.golden.gildedDuration;
     },
   });
 
@@ -643,15 +646,15 @@ function startGame() {
     abbr: 'GRV',
     desc: 'Slow orb that pulls enemies in',
     color: '#9d7cd8',
-    baseChance: 0.15,
-    chancePerLevel: 0.10,
+    baseChance: BAL.enhancements.gravityWell.baseChance,
+    chancePerLevel: BAL.enhancements.gravityWell.chancePerLevel,
     replacesDefault: true,
     onCreate: (_b, slot) => {
       const bx = player.x;
       const by = player.y - player.h / 2;
-      const wellLife = 2 + slot.level * 0.5;
+      const wellLife = BAL.enhancements.gravityWell.baseLife + slot.level * BAL.enhancements.gravityWell.lifePerLevel;
       return [{
-        x: bx, y: by, vx: 0, vy: -120, w: 14, h: 14,
+        x: bx, y: by, vx: 0, vy: -BAL.enhancements.gravityWell.speed, w: 14, h: 14,
         alive: true, owner: 'player', ...BULLET_DEFAULTS,
         enhancement: 'gravityWell',
         gravityWellLife: wellLife,
@@ -662,8 +665,8 @@ function startGame() {
       if (b.gravityWellLife <= 0) { b.alive = false; return; }
       b.x += b.vx * dt;
       b.y += b.vy * dt;
-      b.vx *= (1 - 2 * dt);
-      b.vy *= (1 - 2 * dt);
+      b.vx *= (1 - BAL.enhancements.gravityWell.drag * dt);
+      b.vy *= (1 - BAL.enhancements.gravityWell.drag * dt);
       if (b.y < -20 || b.y > H + 20) b.alive = false;
     },
     onRender: (b, c, now) => {
@@ -693,13 +696,13 @@ function startGame() {
     abbr: 'DRN',
     desc: 'Chance to heal on hit',
     color: COLORS.red,
-    baseChance: 0.15,
-    chancePerLevel: 0.10,
+    baseChance: BAL.enhancements.lifeDrain.baseChance,
+    chancePerLevel: BAL.enhancements.lifeDrain.chancePerLevel,
     onHit: () => {
       const slot = player.enhancementSlots.find(s => s?.type === 'lifeDrain');
-      const healChance = 0.25 + (slot ? slot.level * 0.1 : 0);
+      const healChance = BAL.enhancements.lifeDrain.baseHealChance + (slot ? slot.level * BAL.enhancements.lifeDrain.healChancePerLevel : 0);
       if (Math.random() < healChance && player.hp < player.maxHp) {
-        const healAmt = (slot && slot.level >= 3 && Math.random() < 0.3) ? 2 : 1;
+        const healAmt = (slot && slot.level >= BAL.enhancements.lifeDrain.doubleHealLevel && Math.random() < BAL.enhancements.lifeDrain.doubleHealChance) ? 2 : 1;
         player.hp = Math.min(player.maxHp, player.hp + healAmt);
         particles.push({
           x: player.x, y: player.y - player.h,
@@ -717,11 +720,11 @@ function startGame() {
     abbr: 'PRC',
     desc: 'Bullets pass through enemies',
     color: COLORS.cyan,
-    baseChance: 0.15,
-    chancePerLevel: 0.10,
+    baseChance: BAL.enhancements.pierce.baseChance,
+    chancePerLevel: BAL.enhancements.pierce.chancePerLevel,
     onCreate: (b, slot) => {
-      b.pierceCount = 1 + slot.level;
-      b.h = 14;
+      b.pierceCount = BAL.enhancements.pierce.basePierceCount + slot.level;
+      b.h = BAL.enhancements.pierce.bulletH;
     },
     onRender: (b, ctx) => {
       ctx.globalAlpha = 0.3;
@@ -757,7 +760,7 @@ function startGame() {
     const dy = player.y - e.y;
     const d = dist(e.x, e.y, player.x, player.y);
     if (d === 0) return;
-    const speed = 180 + state.wave * 5;
+    const speed = BAL.attacks.aimed.baseSpeed + state.wave * BAL.attacks.aimed.speedPerWave;
     bullets.push({
       x: e.x,
       y: e.y + e.h / 2,
@@ -776,10 +779,11 @@ function startGame() {
     const dy = player.y - e.y;
     const d = dist(e.x, e.y, player.x, player.y);
     if (d === 0) return;
-    const speed = 200 + state.wave * 5;
+    const speed = BAL.attacks.aimedBurst.baseSpeed + state.wave * BAL.attacks.aimedBurst.speedPerWave;
     const baseAngle = Math.atan2(dy, dx);
-    for (let i = -2; i <= 2; i++) {
-      const angle = baseAngle + i * 0.15;
+    const half = Math.floor(BAL.attacks.aimedBurst.count / 2);
+    for (let i = -half; i <= half; i++) {
+      const angle = baseAngle + i * BAL.attacks.aimedBurst.spreadAngle;
       bullets.push({
         x: e.x,
         y: e.y + e.h / 2,
@@ -795,8 +799,8 @@ function startGame() {
   }
 
   function fireRadial(e: Enemy) {
-    const count = 8 + Math.floor(state.wave / 3);
-    const speed = 140 + state.wave * 3;
+    const count = BAL.attacks.radial.baseCount + Math.floor(state.wave / BAL.attacks.radial.countPerWaveDivisor);
+    const speed = BAL.attacks.radial.baseSpeed + state.wave * BAL.attacks.radial.speedPerWave;
     for (let i = 0; i < count; i++) {
       const angle = (Math.PI * 2 * i) / count + e.time;
       bullets.push({
@@ -814,11 +818,11 @@ function startGame() {
   }
 
   function fireSpiralBurst(e: Enemy) {
-    const speed = 120 + state.wave * 2;
-    for (let v = 0; v < 5; v++) {
-      const baseAngle = e.spiralAngle + v * 0.4;
-      for (let i = 0; i < 3; i++) {
-        const angle = baseAngle + (i * Math.PI * 2) / 3;
+    const speed = BAL.attacks.spiral.baseSpeed + state.wave * BAL.attacks.spiral.speedPerWave;
+    for (let v = 0; v < BAL.attacks.spiral.volleys; v++) {
+      const baseAngle = e.spiralAngle + v * BAL.attacks.spiral.volleyAngleStep;
+      for (let i = 0; i < BAL.attacks.spiral.armsPerVolley; i++) {
+        const angle = baseAngle + (i * Math.PI * 2) / BAL.attacks.spiral.armsPerVolley;
         bullets.push({
           x: e.x, y: e.y,
           vx: Math.cos(angle) * speed,
@@ -829,19 +833,19 @@ function startGame() {
         });
       }
     }
-    e.spiralAngle += 2.0;
+    e.spiralAngle += BAL.attacks.spiral.angleIncrement;
   }
 
   function fireWall(e: Enemy) {
-    const gapX = W * 0.15 + Math.random() * W * 0.7;
-    const gapW = 70;
-    const speed = 150 + state.wave * 3;
-    for (let x = 15; x < W; x += 30) {
+    const gapX = W * BAL.attacks.wall.gapMinRatio + Math.random() * W * BAL.attacks.wall.gapRangeRatio;
+    const gapW = BAL.attacks.wall.gapWidth;
+    const speed = BAL.attacks.wall.baseSpeed + state.wave * BAL.attacks.wall.speedPerWave;
+    for (let x = BAL.attacks.wall.spacing / 2; x < W; x += BAL.attacks.wall.spacing) {
       if (Math.abs(x - gapX) < gapW / 2) continue;
       bullets.push({
         x, y: e.y + e.h / 2,
         vx: 0, vy: speed,
-        w: 20, h: 8,
+        w: BAL.attacks.wall.bulletW, h: BAL.attacks.wall.bulletH,
         alive: true, owner: 'enemy',
         ...BULLET_DEFAULTS,
       });
@@ -854,15 +858,15 @@ function startGame() {
     bullets.push({
       x: lx, y: ly, vx: 0, vy: 0, w: 4, h: H - ly,
       alive: true, owner: 'enemy', ...BULLET_DEFAULTS,
-      isLaserWarning: true, warningTimer: 0.8, warningX: lx, warningSourceY: ly,
+      isLaserWarning: true, warningTimer: BAL.attacks.laser.warningDuration, warningX: lx, warningSourceY: ly,
     });
   }
 
   function fireLaserBeam(x: number, sourceY: number) {
     bullets.push({
-      x, y: sourceY, vx: 0, vy: 0, w: 14, h: H - sourceY,
+      x, y: sourceY, vx: 0, vy: 0, w: BAL.attacks.laser.beamWidth, h: H - sourceY,
       alive: true, owner: 'enemy', ...BULLET_DEFAULTS,
-      isLaser: true, laserLife: 0.35,
+      isLaser: true, laserLife: BAL.attacks.laser.beamLife,
     });
     for (let py = sourceY; py < H; py += 30) {
       particles.push({
@@ -874,12 +878,12 @@ function startGame() {
   }
 
   function throwMine(e: Enemy) {
-    const targetX = player.x + (Math.random() - 0.5) * 80;
-    const targetY = player.y + (Math.random() - 0.5) * 60;
+    const targetX = player.x + (Math.random() - 0.5) * BAL.attacks.mine.targetSpreadX;
+    const targetY = player.y + (Math.random() - 0.5) * BAL.attacks.mine.targetSpreadY;
     const dx = targetX - e.x;
     const dy = targetY - e.y;
     const d = dist(e.x, e.y, targetX, targetY);
-    const speed = e.isBoss ? (400 + Math.random() * 150) : (250 + Math.random() * 100);
+    const speed = e.isBoss ? (BAL.attacks.mine.bossSpeed + Math.random() * BAL.attacks.mine.bossSpeedRandom) : (BAL.attacks.mine.baseSpeed + Math.random() * BAL.attacks.mine.speedRandom);
     bullets.push({
       x: e.x, y: e.y + e.h / 2,
       vx: d > 0 ? (dx / d) * speed : 0,
@@ -894,9 +898,9 @@ function startGame() {
     const dx = player.x - e.x;
     const dy = player.y - e.y;
     const baseAngle = Math.atan2(dy, dx);
-    const count = 5;
-    const spread = Math.PI / 3;
-    const speed = 220 + state.wave * 4;
+    const count = BAL.attacks.shotgun.count;
+    const spread = BAL.attacks.shotgun.spread;
+    const speed = BAL.attacks.shotgun.baseSpeed + state.wave * BAL.attacks.shotgun.speedPerWave;
     for (let i = 0; i < count; i++) {
       const angle = baseAngle + spread * ((i / (count - 1)) - 0.5);
       bullets.push({
@@ -914,9 +918,9 @@ function startGame() {
     const dx = player.x - e.x;
     const dy = player.y - e.y;
     const baseAngle = Math.atan2(dy, dx);
-    const count = 9;
-    const spread = Math.PI / 4;
-    const speed = 260 + state.wave * 4;
+    const count = BAL.attacks.shotgunBoss.count;
+    const spread = BAL.attacks.shotgunBoss.spread;
+    const speed = BAL.attacks.shotgunBoss.baseSpeed + state.wave * BAL.attacks.shotgunBoss.speedPerWave;
     for (let i = 0; i < count; i++) {
       const angle = baseAngle + spread * ((i / (count - 1)) - 0.5);
       bullets.push({
@@ -932,7 +936,7 @@ function startGame() {
 
   registerAttack({
     id: 'aimed',
-    unlockWave: 1,
+    unlockWave: BAL.attacks.aimed.unlockWave,
     label: 'AIM',
     glowColor: COLORS.orange,
     bgColor: 'rgba(255,158,100,0.3)',
@@ -942,7 +946,7 @@ function startGame() {
 
   registerAttack({
     id: 'radial',
-    unlockWave: 6,
+    unlockWave: BAL.attacks.radial.unlockWave,
     label: 'RAD',
     glowColor: COLORS.red,
     bgColor: 'rgba(247,118,142,0.3)',
@@ -952,7 +956,7 @@ function startGame() {
 
   registerAttack({
     id: 'laser',
-    unlockWave: 9,
+    unlockWave: BAL.attacks.laser.unlockWave,
     label: 'LAS',
     glowColor: COLORS.blue,
     bgColor: 'rgba(122,162,247,0.3)',
@@ -960,14 +964,13 @@ function startGame() {
     fire: fireLaserWarning,
     bossFire: (e: Enemy) => {
       fireLaserWarning(e);
-      const offsets = [-100, 100];
-      for (const ox of offsets) {
+      for (const ox of BAL.attacks.laser.bossOffsets) {
         const lx = Math.max(20, Math.min(W - 20, player.x + ox));
         const ly = e.y + e.h / 2;
         bullets.push({
           x: lx, y: ly, vx: 0, vy: 0, w: 4, h: H - ly,
           alive: true, owner: 'enemy', ...BULLET_DEFAULTS,
-          isLaserWarning: true, warningTimer: 0.8, warningX: lx, warningSourceY: ly,
+          isLaserWarning: true, warningTimer: BAL.attacks.laser.warningDuration, warningX: lx, warningSourceY: ly,
         });
       }
     },
@@ -975,14 +978,14 @@ function startGame() {
 
   registerAttack({
     id: 'mine',
-    unlockWave: 12,
+    unlockWave: BAL.attacks.mine.unlockWave,
     label: 'MIN',
     glowColor: COLORS.yellow,
     bgColor: 'rgba(224,175,104,0.3)',
     introWarning: 'NEW THREAT: LAND MINES',
     fire: throwMine,
     bossFire: (e: Enemy) => {
-      for (let i = 0; i < 4; i++) throwMine(e);
+      for (let i = 0; i < BAL.attacks.mine.bossVolley; i++) throwMine(e);
     },
   });
 
@@ -1008,7 +1011,7 @@ function startGame() {
 
   registerAttack({
     id: 'shotgun',
-    unlockWave: 6,
+    unlockWave: BAL.attacks.shotgun.unlockWave,
     label: 'SHT',
     glowColor: COLORS.red,
     bgColor: 'rgba(247,118,142,0.3)',
@@ -1066,7 +1069,7 @@ function startGame() {
     const measured = ctx.measureText(word);
     const ew = measured.width + 12;
     const eh = 24;
-    const shootChance = Math.min(0.9, 0.3 + state.wave * 0.05);
+    const shootChance = Math.min(BAL.wave.shootChanceMax, BAL.wave.shootChanceBase + state.wave * BAL.wave.shootChancePerWave);
     const canShoot = enemiesShootThisWave() && Math.random() < shootChance;
     return {
       x, y: -eh, vx: 0, vy: stats.speed,
@@ -1076,8 +1079,8 @@ function startGame() {
       pattern, phaseOffset: Math.random() * Math.PI * 2,
       baseX: x, time: 0,
       canShoot, attackType: canShoot ? pickAttack() : 'aimed',
-      shootTimer: 1 + Math.random() * 2,
-      shootInterval: Math.max(1.5, 3 - state.wave * 0.1),
+      shootTimer: BAL.wave.shootTimerBase + Math.random() * BAL.wave.shootTimerRandom,
+      shootInterval: Math.max(BAL.wave.minShootInterval, BAL.wave.shootIntervalBase - state.wave * BAL.wave.shootIntervalDecay),
       ...ENEMY_DEFAULTS,
       ...overrides,
     };
@@ -1090,24 +1093,24 @@ function startGame() {
         break;
       case 'sine':
         e.y += e.vy * dt;
-        e.x = e.baseX + Math.sin(e.time * 2 + e.phaseOffset) * 80;
+        e.x = e.baseX + Math.sin(e.time * BAL.movement.sine.frequency + e.phaseOffset) * BAL.movement.sine.amplitude;
         break;
       case 'zigzag':
         e.y += e.vy * dt;
-        e.x = e.baseX + ((Math.floor(e.time * 2) % 2 === 0 ? 1 : -1) * 60 * (e.time % 0.5)) / 0.5;
+        e.x = e.baseX + ((Math.floor(e.time * BAL.movement.zigzag.frequency) % 2 === 0 ? 1 : -1) * BAL.movement.zigzag.amplitude * (e.time % 0.5)) / 0.5;
         break;
       case 'erratic':
         e.y += e.vy * dt;
-        e.x = e.baseX + Math.sin(e.time * 6 + e.phaseOffset) * 40
-            + Math.cos(e.time * 4.3 + e.phaseOffset * 2) * 25;
+        e.x = e.baseX + Math.sin(e.time * BAL.movement.erratic.freq1 + e.phaseOffset) * BAL.movement.erratic.amp1
+            + Math.cos(e.time * BAL.movement.erratic.freq2 + e.phaseOffset * 2) * BAL.movement.erratic.amp2;
         break;
     }
   }
 
   registerEnemyType({
     id: 'normal',
-    unlockWave: 1,
-    weight: 3,
+    unlockWave: BAL.enemyTypes.normal.unlockWave,
+    weight: BAL.enemyTypes.normal.weight,
     spawn: () => {
       const word = nextWord();
       const stats = getEnemyStats(word);
@@ -1118,14 +1121,14 @@ function startGame() {
 
   registerEnemyType({
     id: 'splitter',
-    unlockWave: 5,
-    weight: 1,
+    unlockWave: BAL.enemyTypes.splitter.unlockWave,
+    weight: BAL.enemyTypes.splitter.weight,
     introWarning: 'NEW ENEMY: SPLITTERS',
     spawn: () => {
       const word = nextWord();
       const stats = getEnemyStats(word);
       const x = Math.random() * (W - 60) + 30;
-      enemies.push(makeBaseEnemy(x, word, { hp: stats.hp + 1, speed: stats.speed }, {
+      enemies.push(makeBaseEnemy(x, word, { hp: stats.hp + BAL.enemyTypes.splitter.hpBonus, speed: stats.speed }, {
         enemyType: 'splitter',
       }));
     },
@@ -1136,19 +1139,19 @@ function startGame() {
 
   registerEnemyType({
     id: 'swarm',
-    unlockWave: 8,
-    weight: 1,
+    unlockWave: BAL.enemyTypes.swarm.unlockWave,
+    weight: BAL.enemyTypes.swarm.weight,
     introWarning: 'NEW ENEMY: SWARM',
     spawn: () => {
-      const count = 8 + Math.floor(Math.random() * 3);
+      const count = BAL.enemyTypes.swarm.countBase + Math.floor(Math.random() * BAL.enemyTypes.swarm.countRandom);
       const clusterX = Math.random() * (W - 100) + 50;
       const chars = ['*', '#', '~', '!', '@'];
       for (let i = 0; i < count; i++) {
-        const x = clusterX + (Math.random() - 0.5) * 80;
+        const x = clusterX + (Math.random() - 0.5) * BAL.enemyTypes.swarm.clusterSpread;
         const ch = chars[Math.floor(Math.random() * chars.length)];
         enemies.push({
           x, y: -(Math.random() * 40), vx: 0,
-          vy: 150 + state.wave * 6 + Math.random() * 60,
+          vy: BAL.enemyTypes.swarm.speedBase + state.wave * BAL.enemyTypes.swarm.speedPerWave + Math.random() * BAL.enemyTypes.swarm.speedRandom,
           w: 16, h: 16, word: ch,
           hp: 1, maxHp: 1,
           alive: true, hitFlash: 0,
@@ -1168,8 +1171,8 @@ function startGame() {
 
   registerEnemyType({
     id: 'cloaker',
-    unlockWave: 11,
-    weight: 1,
+    unlockWave: BAL.enemyTypes.cloaker.unlockWave,
+    weight: BAL.enemyTypes.cloaker.weight,
     introWarning: 'NEW ENEMY: CLOAKERS',
     spawn: () => {
       const word = nextWord();
@@ -1181,8 +1184,8 @@ function startGame() {
       }));
     },
     move: (e, dt) => {
-      e.cloakPhase += dt * 1.5;
-      e.cloakVisible = Math.sin(e.cloakPhase) > -0.3;
+      e.cloakPhase += dt * BAL.enemyTypes.cloaker.cloakSpeed;
+      e.cloakVisible = Math.sin(e.cloakPhase) > BAL.enemyTypes.cloaker.visibleThreshold;
       moveByPattern(e, dt);
     },
     canBeHit: (e) => e.cloakVisible,
@@ -1207,11 +1210,11 @@ function startGame() {
   }
 
   function spawnSplitterChildren(parent: Enemy) {
-    const count = 2 + Math.floor(Math.random() * 2);
+    const count = BAL.enemyTypes.splitter.childCountBase + Math.floor(Math.random() * BAL.enemyTypes.splitter.childCountRandom);
     for (let i = 0; i < count; i++) {
-      const offsetX = (i - (count - 1) / 2) * 30;
+      const offsetX = (i - (count - 1) / 2) * BAL.enemyTypes.splitter.childOffsetX;
       enemies.push({
-        x: parent.x + offsetX, y: parent.y, vx: 0, vy: parent.vy * 1.5,
+        x: parent.x + offsetX, y: parent.y, vx: 0, vy: parent.vy * BAL.enemyTypes.splitter.childSpeedMult,
         w: Math.max(16, parent.w - 8), h: 18,
         word: parent.word.slice(0, Math.max(2, Math.ceil(parent.word.length / 2))),
         hp: 1, maxHp: 1,
@@ -1235,21 +1238,21 @@ function startGame() {
 
   function spawnBoss() {
     state.bossActive = true;
-    const bossHp = 30 + state.wave * 5;
+    const bossHp = BAL.boss.hpBase + state.wave * BAL.boss.hpPerWave;
     const bossWord = '< BOSS >';
     ctx.font = 'bold 24px monospace';
     const measured = ctx.measureText(bossWord);
     const bw = measured.width + 40;
     const bh = 40;
     enemies.push({
-      x: W / 2, y: -bh, vx: 0, vy: 40,
+      x: W / 2, y: -bh, vx: 0, vy: BAL.boss.speed,
       w: bw, h: bh, word: bossWord,
       hp: bossHp, maxHp: bossHp,
       alive: true, hitFlash: 0,
       pattern: 'sine', phaseOffset: 0,
       baseX: W / 2, time: 0,
       canShoot: true, attackType: 'aimed',
-      shootTimer: 1, shootInterval: 0.8,
+      shootTimer: 1, shootInterval: BAL.boss.shootInterval,
       isBoss: true, bossAttackIndex: 0, bossAttackTimer: 0,
       gildedTimer: 0,
       enemyType: 'normal' as EnemyType,
@@ -1270,21 +1273,21 @@ function startGame() {
 
     state.totalKills++;
     const gilded = e.gildedTimer > 0;
-    const mult = gilded ? 5 : 1;
-    state.score += e.word.length * 10 * mult;
-    state.points += 1 * mult;
+    const mult = gilded ? BAL.enhancements.golden.pointMult : 1;
+    state.score += e.word.length * BAL.timing.killScorePerChar * mult;
+    state.points += BAL.timing.killPoints * mult;
 
     state.combo++;
-    state.comboTimer = 3;
+    state.comboTimer = BAL.timing.comboDecay;
     if (state.combo > state.bestCombo) state.bestCombo = state.combo;
 
     if (e.isBoss) {
       state.bossActive = false;
-      state.points += 10 * mult;
+      state.points += BAL.boss.killPoints * mult;
       spawnBossDeathEffect(e.x, e.y);
-      triggerShake(12, 0.6);
-      state.timeScale = 0.15;
-      state.timeScaleTimer = 1.5;
+      triggerShake(BAL.boss.killShakeIntensity, BAL.boss.killShakeDuration);
+      state.timeScale = BAL.boss.killSlowMo;
+      state.timeScaleTimer = BAL.boss.killSlowMoDuration;
       for (let i = 0; i < 24; i++) {
         const angle = (Math.PI * 2 * i) / 24;
         const speed = 60 + Math.random() * 120;
@@ -1310,8 +1313,8 @@ function startGame() {
         });
       }
     }
-    if (Math.random() < (e.isBoss ? 0.5 : 0.12)) {
-      lootCrates.push({ x: e.x, y: e.y, vy: 30, alive: true, enhancement: randomEnhancementType() });
+    if (Math.random() < (e.isBoss ? BAL.loot.bossDropChance : BAL.loot.dropChance)) {
+      lootCrates.push({ x: e.x, y: e.y, vy: BAL.loot.crateSpeed, alive: true, enhancement: randomEnhancementType() });
     }
   }
 
@@ -1329,7 +1332,7 @@ function startGame() {
       if (!e.alive) continue;
       const typeDef = ENEMY_TYPE_REGISTRY[e.enemyType];
       if (typeDef?.canBeHit && !typeDef.canBeHit(e)) continue;
-      if (dist(x, y, e.x, e.y) < 80) {
+      if (dist(x, y, e.x, e.y) < BAL.enhancements.exploding.aoeRadius) {
         e.hp--;
         e.hitFlash = 1;
         if (e.hp <= 0) killEnemy(e);
@@ -1392,7 +1395,7 @@ function startGame() {
         id: 'hp_up',
         name: '+1 Max HP',
         desc: 'Increase maximum health by 1',
-        cost: shopCost(3, 'hp_up'),
+        cost: shopCost(BAL.shop.hpUpBase, 'hp_up'),
         available: () => true,
         apply: () => {
           player.maxHp++;
@@ -1404,7 +1407,7 @@ function startGame() {
         id: 'heal',
         name: 'Full Heal',
         desc: 'Restore all health',
-        cost: shopCost(2, 'heal'),
+        cost: shopCost(BAL.shop.healBase, 'heal'),
         available: () => player.hp < player.maxHp,
         apply: () => {
           player.hp = player.maxHp;
@@ -1415,10 +1418,10 @@ function startGame() {
         id: 'fire_rate',
         name: 'Faster Firing',
         desc: `Reduce shot cooldown (current: ${Math.round(player.shootCooldown * 1000)}ms)`,
-        cost: shopCost(3, 'fire_rate'),
-        available: () => player.shootCooldown > 0.04,
+        cost: shopCost(BAL.shop.fireRateBase, 'fire_rate'),
+        available: () => player.shootCooldown > BAL.shop.fireRateMin,
         apply: () => {
-          player.shootCooldown = Math.max(0.04, player.shootCooldown - 0.02);
+          player.shootCooldown = Math.max(BAL.shop.fireRateMin, player.shootCooldown - BAL.shop.fireRateStep);
           purchaseCounts['fire_rate'] = (purchaseCounts['fire_rate'] || 0) + 1;
         },
       },
@@ -1426,8 +1429,8 @@ function startGame() {
         id: 'max_bullets',
         name: '+1 Bullet Count',
         desc: `More bullets on screen (current: ${player.maxBullets})`,
-        cost: shopCost(2, 'max_bullets'),
-        available: () => player.maxBullets < 12,
+        cost: shopCost(BAL.shop.maxBulletsBase, 'max_bullets'),
+        available: () => player.maxBullets < BAL.shop.maxBulletsCap,
         apply: () => {
           player.maxBullets++;
           purchaseCounts['max_bullets'] = (purchaseCounts['max_bullets'] || 0) + 1;
@@ -1444,8 +1447,8 @@ function startGame() {
         id: slotId,
         name: `${def.name} Lv${slot.level + 1}`,
         desc: `+${Math.round(def.chancePerLevel * 100)}% chance (current: ${pct(slot.chance)})`,
-        cost: shopCost(3 + slot.level, slotId),
-        available: () => slot.level < 5,
+        cost: shopCost(BAL.shop.enhanceBaseCost + slot.level, slotId),
+        available: () => slot.level < BAL.shop.enhanceLevelCap,
         apply: () => {
           slot.level++;
           slot.chance = Math.min(1, slot.chance + def.chancePerLevel);
@@ -1454,7 +1457,7 @@ function startGame() {
       });
 
       const sacrificeId = `sacrifice_${i}`;
-      const reward = 3 + slot.level * 2;
+      const reward = BAL.shop.sacrificeBaseReward + slot.level * BAL.shop.sacrificeRewardPerLevel;
       items.push({
         id: sacrificeId,
         name: `Sacrifice ${def.name}`,
@@ -1477,11 +1480,11 @@ function startGame() {
 
   function startWave() {
     state.phase = 'waveIntro';
-    state.waveTimer = isBossWave() ? 3 : 2;
+    state.waveTimer = isBossWave() ? BAL.wave.bossIntroDuration : BAL.wave.introDuration;
     state.enemiesSpawned = 0;
-    state.enemiesPerWave = isBossWave() ? 0 : 6 + state.wave * 2;
+    state.enemiesPerWave = isBossWave() ? 0 : BAL.wave.baseEnemies + state.wave * BAL.wave.enemiesPerWave;
     state.enemiesRemaining = state.enemiesPerWave;
-    state.spawnInterval = Math.max(0.3, 1.2 - state.wave * 0.08);
+    state.spawnInterval = Math.max(BAL.wave.minSpawnInterval, BAL.wave.baseSpawnInterval - state.wave * BAL.wave.spawnIntervalDecay);
     state.spawnTimer = 0;
     state.bossActive = false;
   }
@@ -1526,7 +1529,7 @@ function startGame() {
       const bx = player.x;
       const by = player.y - player.h / 2;
       const b: Bullet = {
-        x: bx, y: by, vx: 0, vy: -600, w: 4, h: 12,
+        x: bx, y: by, vx: 0, vy: -BAL.player.bulletSpeed, w: BAL.player.bulletW, h: BAL.player.bulletH,
         alive: true, owner: 'player', ...BULLET_DEFAULTS,
         enhancement,
       };
@@ -1538,7 +1541,7 @@ function startGame() {
     const bx = player.x;
     const by = player.y - player.h / 2;
     bullets.push({
-      x: bx, y: by, vx: 0, vy: -600, w: 4, h: 12,
+      x: bx, y: by, vx: 0, vy: -BAL.player.bulletSpeed, w: BAL.player.bulletW, h: BAL.player.bulletH,
       alive: true, owner: 'player', ...BULLET_DEFAULTS,
     });
   }
@@ -1548,10 +1551,10 @@ function startGame() {
       if (!b.alive || b.owner !== 'enemy' || b.isMine || b.isLaser || b.isLaserWarning || b.grazed) continue;
       const d = dist(b.x, b.y, player.x, player.y);
       const collisionDist = (b.w + player.w) / 2;
-      if (d < 30 && d > collisionDist) {
+      if (d < BAL.player.grazeDistance && d > collisionDist) {
         b.grazed = true;
-        state.grazeScore += 5;
-        state.score += 5;
+        state.grazeScore += BAL.player.grazeScore;
+        state.score += BAL.player.grazeScore;
         for (let i = 0; i < 3; i++) {
           particles.push({
             x: player.x + (Math.random() - 0.5) * 16,
@@ -1570,7 +1573,7 @@ function startGame() {
 
   function updateCrateOpening() {
     const hasEmptySlot = player.enhancementSlots.some(s => s === null);
-    const rerollCost = 3 + Math.floor(state.wave / 2);
+    const rerollCost = BAL.loot.rerollBaseCost + Math.floor(state.wave / BAL.loot.rerollCostPerWaveDivisor);
     const canReroll = state.points >= rerollCost;
     const options: string[] = [];
     if (hasEmptySlot) options.push('TAKE');
@@ -1696,12 +1699,12 @@ function startGame() {
         if (b.fuseTimer < 0) {
           b.x += b.vx * dt;
           b.y += b.vy * dt;
-          b.vx *= (1 - 3 * dt);
-          b.vy *= (1 - 3 * dt);
-          if (Math.abs(b.vx) < 10 && Math.abs(b.vy) < 10) {
+          b.vx *= (1 - BAL.timing.mineDrag * dt);
+          b.vy *= (1 - BAL.timing.mineDrag * dt);
+          if (Math.abs(b.vx) < BAL.timing.mineStopThreshold && Math.abs(b.vy) < BAL.timing.mineStopThreshold) {
             b.vx = 0;
             b.vy = 0;
-            b.fuseTimer = 2.5 + Math.random() * 1.5;
+            b.fuseTimer = BAL.attacks.mine.fuseBase + Math.random() * BAL.attacks.mine.fuseRandom;
           }
           if (b.x < -20 || b.x > W + 20 || b.y > H + 20) b.alive = false;
         } else {
@@ -1711,10 +1714,10 @@ function startGame() {
             spawnMineExplosion(b.x, b.y);
             if (
               performance.now() > player.invincibleUntil &&
-              aabb(b.x, b.y, 120, 120, player.x, player.y, 0, 0)
+              aabb(b.x, b.y, BAL.attacks.mine.blastRadius, BAL.attacks.mine.blastRadius, player.x, player.y, 0, 0)
             ) {
               player.hp--;
-              player.invincibleUntil = performance.now() + 1500;
+              player.invincibleUntil = performance.now() + BAL.player.invincibleMs;
               triggerShake(10, 0.4);
               if (player.hp <= 0) state.phase = 'gameOver';
             }
@@ -1742,20 +1745,20 @@ function startGame() {
     for (const e of enemies) {
       if (!e.alive) continue;
       e.time += dt;
-      e.hitFlash = Math.max(0, e.hitFlash - dt * 5);
+      e.hitFlash = Math.max(0, e.hitFlash - dt * BAL.timing.hitFlashRate);
       if (e.gildedTimer > 0) e.gildedTimer -= dt;
 
       const typeDef = ENEMY_TYPE_REGISTRY[e.enemyType];
 
       if (e.isBoss) {
-        if (e.y < 80) {
+        if (e.y < BAL.boss.restY) {
           e.y += e.vy * dt;
         } else {
-          e.y = 80;
-          e.x = W / 2 + Math.sin(e.time * 0.8) * (W * 0.3);
+          e.y = BAL.boss.restY;
+          e.x = W / 2 + Math.sin(e.time * BAL.boss.sineSpeed) * (W * BAL.boss.sineAmplitudeRatio);
         }
         e.bossAttackTimer += dt;
-        if (e.bossAttackTimer >= 1.5) {
+        if (e.bossAttackTimer >= BAL.boss.attackTimer) {
           bossShoot(e);
           e.bossAttackTimer = 0;
           e.bossAttackIndex++;
@@ -1783,8 +1786,8 @@ function startGame() {
 
       // Gravity well pull (applied after movement)
       const gravSlot = player.enhancementSlots.find(s => s?.type === 'gravityWell');
-      const pullRadius = 100 + (gravSlot ? gravSlot.level * 20 : 0);
-      const pullForce = 80 + (gravSlot ? gravSlot.level * 15 : 0);
+      const pullRadius = BAL.enhancements.gravityWell.basePullRadius + (gravSlot ? gravSlot.level * BAL.enhancements.gravityWell.pullRadiusPerLevel : 0);
+      const pullForce = BAL.enhancements.gravityWell.basePullForce + (gravSlot ? gravSlot.level * BAL.enhancements.gravityWell.pullForcePerLevel : 0);
       let gdx = 0, gdy = 0;
       for (const b of bullets) {
         if (!b.alive || b.enhancement !== 'gravityWell' || b.owner !== 'player') continue;
@@ -1796,7 +1799,7 @@ function startGame() {
         }
       }
       const gLen = Math.sqrt(gdx * gdx + gdy * gdy);
-      const maxPull = pullForce * 1.2;
+      const maxPull = pullForce * BAL.enhancements.gravityWell.pullForceCap;
       if (gLen > maxPull) {
         gdx = (gdx / gLen) * maxPull;
         gdy = (gdy / gLen) * maxPull;
@@ -1810,7 +1813,7 @@ function startGame() {
       // Collision with player
       if (now > player.invincibleUntil && aabb(e.x, e.y, e.w, e.h, player.x, player.y, player.w, player.h)) {
         player.hp--;
-        player.invincibleUntil = now + 1500;
+        player.invincibleUntil = now + BAL.player.invincibleMs;
         triggerShake(10, 0.4);
         if (player.hp <= 0) state.phase = 'gameOver';
       }
@@ -1826,7 +1829,7 @@ function startGame() {
       if (now > player.invincibleUntil && aabb(b.x, by, b.w, b.h, player.x, player.y, player.w, player.h)) {
         if (!b.isLaser) b.alive = false;
         player.hp--;
-        player.invincibleUntil = now + 1500;
+        player.invincibleUntil = now + BAL.player.invincibleMs;
         triggerShake(10, 0.4);
         if (player.hp <= 0) state.phase = 'gameOver';
       }
@@ -1922,13 +1925,13 @@ function startGame() {
       if (!c.alive) continue;
       c.y += c.vy * dt;
       if (c.y > H + 20) { c.alive = false; continue; }
-      if (aabb(c.x, c.y, 0, 0, player.x, player.y, 60, 60)) {
+      if (aabb(c.x, c.y, 0, 0, player.x, player.y, BAL.loot.cratePickupRadius, BAL.loot.cratePickupRadius)) {
         c.alive = false;
         const allFull = player.enhancementSlots.every(s => s !== null);
         if (allFull) {
-          const bonus = 5;
+          const bonus = BAL.loot.fullSlotsBonus;
           state.points += bonus;
-          state.score += bonus * 10;
+          state.score += bonus * BAL.timing.killScorePerChar;
           particles.push({
             x: c.x, y: c.y, vx: 0, vy: -60,
             life: 1, maxLife: 1, char: `+${bonus}`, color: COLORS.yellow, size: 16,
@@ -2553,7 +2556,7 @@ function startGame() {
     }
 
     const hasEmpty = player.enhancementSlots.some(s => s === null);
-    const rerollCost = 3 + Math.floor(state.wave / 2);
+    const rerollCost = BAL.loot.rerollBaseCost + Math.floor(state.wave / BAL.loot.rerollCostPerWaveDivisor);
     const canReroll = state.points >= rerollCost;
     const options: string[] = [];
     if (hasEmpty) options.push('TAKE');

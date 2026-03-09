@@ -48,9 +48,13 @@ Posts use frontmatter: `title`, `date`, `excerpt` (required), `tags`, `draft`, `
 
 `update()` dispatches to focused subsystem functions: `updatePlayerMovement`, `updatePlayerShooting`, `updateSpawning`, `updateBullets`, `updateEnemies`, `updateCollisions`, `updateDecay`, `updateEffects`, `cleanupDead`, `checkWaveComplete`.
 
+### Balance Constants
+
+`src/scripts/bullet-hell-balance.ts` — single `BAL` export (`as const`) containing all gameplay-affecting numbers. Organized into groups: `player`, `wave`, `enemyTiers`, `boss`, `enemyTypes`, `movement`, `enhancements`, `attacks`, `loot`, `shop`, `timing`. To adjust balance, edit values in this file — the game reads all tuning knobs from `BAL.*`. Visual/rendering values (shadow blur, particle colors, font sizes) stay inline in `bullet-hell.ts`.
+
 ### Key Design Decisions
 
-- Single file, no module splitting (it's a blog script)
+- Single file, no module splitting (it's a blog script) — balance constants are the one exception
 - All functions share closure scope (no GameContext passing)
 - `BOSS_ATTACKS` array is explicit ordering, not derived from registry
 - Gravity well pull stays in `updateEnemies()` (cross-cutting concern)
