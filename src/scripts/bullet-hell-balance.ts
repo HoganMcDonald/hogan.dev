@@ -310,4 +310,40 @@ export const BAL = {
     mineStopThreshold: 10,
     mineDrag: 3,
   },
+
+  combo: {
+    threshold: 3,
+    multPerKill: 0.1,
+    maxMultiplier: 5,
+  },
+
+  elite: {
+    unlockWave: 7,
+    chance: 0.08,
+    chancePerWave: 0.005,
+    maxChance: 0.20,
+    hpMultiplier: 2,
+    pointMultiplier: 3,
+    regenerating: { hpPerSecond: 0.5, unlockWave: 7 },
+    bulletSponge: { damageReduction: 0.5, unlockWave: 12 },
+    vengeful: { burstCount: 8, burstSpeed: 200, unlockWave: 15 },
+  },
+
+  synergies: {
+    homingChainLightning: { autoTargetRange: 180, damageBonus: 0.5 },
+    explodingRadial: { clusterCount: 4, clusterRadius: 40, clusterSpread: 60 },
+    pierceGravityWell: { pullMultiplier: 1.5 },
+    goldenLifeDrain: { healOnKill: 2 },
+  },
+
+  challenge: {
+    startWave: 5,
+    chance: 0.15,
+    bonusPointMultiplier: 1.5,
+    noShoot: { duration: 5 },
+    darkness: { lightRadius: 120 },
+    speedUp: { enemySpeedMult: 1.8 },
+    fragile: { playerHp: 1 },
+    bulletHell: { shootChanceMult: 2, shootIntervalMult: 0.5 },
+  },
 } as const;
