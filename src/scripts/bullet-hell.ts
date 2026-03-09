@@ -2559,7 +2559,7 @@ function startGame() {
     if (state.phase === 'crateOpening') { updateCrateOpening(); clearKeys(); return; }
     if (state.phase === 'shop') { updateShop(); clearKeys(); return; }
     updateWaveIntro(dt);
-    if (state.phase === 'gameOver') { clearKeys(); return; }
+    if (state.phase === 'gameOver') { updateDecay(dt, rawDt); clearKeys(); return; }
 
     updatePlayerMovement(dt);
     updatePlayerShooting(now);
