@@ -122,9 +122,9 @@ export const BAL = {
     orbital: {
       baseChance: 0.15,
       chancePerLevel: 0.10,
-      radius: 60,
-      angularVelocity: 4,
-      baseRotations: 2,
+      radius: 100,
+      angularVelocity: 8,
+      baseRotations: 3,
       rotationsPerLevel: 0.5,
     },
     chainLightning: {
