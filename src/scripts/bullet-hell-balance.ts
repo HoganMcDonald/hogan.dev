@@ -106,6 +106,7 @@ export const BAL = {
       turnRate: 8,
       bulletW: 5,
       bulletH: 10,
+      lifetime: 2.5,
     },
     exploding: {
       baseChance: 0.15,
@@ -122,10 +123,10 @@ export const BAL = {
     orbital: {
       baseChance: 0.15,
       chancePerLevel: 0.10,
-      radius: 100,
-      angularVelocity: 8,
-      baseRotations: 3,
-      rotationsPerLevel: 0.5,
+      radius: 180,
+      angularVelocity: 14,
+      baseRotations: 5,
+      rotationsPerLevel: 1,
     },
     chainLightning: {
       baseChance: 0.15,
@@ -159,10 +160,10 @@ export const BAL = {
     lifeDrain: {
       baseChance: 0.15,
       chancePerLevel: 0.10,
-      baseHealChance: 0.25,
-      healChancePerLevel: 0.1,
+      baseHealChance: 0.12,
+      healChancePerLevel: 0.06,
       doubleHealLevel: 3,
-      doubleHealChance: 0.3,
+      doubleHealChance: 0.15,
     },
     pierce: {
       baseChance: 0.15,
@@ -206,6 +207,7 @@ export const BAL = {
       bossSpeedRandom: 150,
       targetSpreadX: 80,
       targetSpreadY: 60,
+      bossFullCanvas: true,
       drag: 3,
       fuseBase: 2.5,
       fuseRandom: 1.5,
@@ -246,7 +248,7 @@ export const BAL = {
   },
 
   loot: {
-    dropChance: 0.12,
+    dropChance: 0.08,
     bossDropChance: 0.5,
     crateSpeed: 30,
     cratePickupRadius: 60,
@@ -263,11 +265,11 @@ export const BAL = {
     fireRateStep: 0.02,
     maxBulletsBase: 2,
     maxBulletsCap: 12,
-    enhanceLevelCap: 5,
-    enhanceBaseCost: 3,
+    enhanceLevelCap: 7,
+    enhanceBaseCost: 4,
     sacrificeBaseReward: 3,
     sacrificeRewardPerLevel: 2,
-    inflationDivisor: 3,
+    inflationDivisor: 2,
   },
 
   bossTypes: {
@@ -289,6 +291,9 @@ export const BAL = {
       replayDelay: 5,
       replayBufferSize: 300,
       moveSpeed: 280,
+      recordShootInterval: 1.2,
+      replayShootInterval: 0.08,
+      replayAlwaysFire: true,
     },
     cursor: {
       unlockWave: 40,
@@ -341,7 +346,7 @@ export const BAL = {
     chance: 0.15,
     bonusPointMultiplier: 1.5,
     noShoot: { duration: 5 },
-    darkness: { lightRadius: 120 },
+    darkness: { lightRadius: 160 },
     speedUp: { enemySpeedMult: 1.8 },
     fragile: { playerHp: 2 },
     bulletHell: { shootChanceMult: 2, shootIntervalMult: 0.5 },

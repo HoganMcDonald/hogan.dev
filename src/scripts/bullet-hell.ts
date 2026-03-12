@@ -60,6 +60,7 @@ interface Bullet {
   owner: BulletOwner;
   enhancement: EnhancementType | null;
   target?: Enemy;
+  homingLife: number;
   orbitAngle: number;
   orbitRadius: number;
   orbitRotations: number;
@@ -254,6 +255,7 @@ const COLORS = {
 
 const BULLET_DEFAULTS = {
   enhancement: null as EnhancementType | null,
+  homingLife: 0,
   orbitAngle: 0,
   orbitRadius: 0,
   orbitRotations: 0,
@@ -593,8 +595,11 @@ function startGame() {
       b.w = BAL.enhancements.homing.bulletW;
       b.h = BAL.enhancements.homing.bulletH;
       b.target = findNearestEnemy(b.x, b.y);
+      b.homingLife = BAL.enhancements.homing.lifetime;
     },
     onUpdate: (b, dt) => {
+      b.homingLife = (b.homingLife ?? 0) - dt;
+      if (b.homingLife <= 0) { b.alive = false; return; }
       if (!b.target || !b.target.alive) b.target = findNearestEnemy(b.x, b.y);
       if (b.target) {
         const tdx = b.target.x - b.x;
@@ -997,8 +1002,12 @@ function startGame() {
   }
 
   function throwMine(e: Enemy) {
-    const targetX = player.x + (Math.random() - 0.5) * BAL.attacks.mine.targetSpreadX;
-    const targetY = player.y + (Math.random() - 0.5) * BAL.attacks.mine.targetSpreadY;
+    const targetX = e.isBoss && BAL.attacks.mine.bossFullCanvas
+      ? Math.random() * W
+      : player.x + (Math.random() - 0.5) * BAL.attacks.mine.targetSpreadX;
+    const targetY = e.isBoss && BAL.attacks.mine.bossFullCanvas
+      ? Math.random() * H
+      : player.y + (Math.random() - 0.5) * BAL.attacks.mine.targetSpreadY;
     const dx = targetX - e.x;
     const dy = targetY - e.y;
     const d = dist(e.x, e.y, targetX, targetY);
@@ -1705,18 +1714,18 @@ function startGame() {
       data.shootTimer = (data.shootTimer || 0) + dt;
       if (data.phase === 'recording') {
         // Simple aimed shots during recording
-        if (data.shootTimer >= BAL.boss.attackTimer) {
+        if (data.shootTimer >= BAL.bossTypes.echo.recordShootInterval) {
           data.shootTimer = 0;
           const angle = Math.atan2(player.y - e.y, player.x - e.x);
           const speed = BAL.attacks.aimed.baseSpeed + state.wave * BAL.attacks.aimed.speedPerWave;
           bullets.push({ x: e.x, y: e.y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, w: 6, h: 6, alive: true, owner: 'enemy', ...BULLET_DEFAULTS });
         }
       } else {
-        // Replaying: fire when recording shows player was shooting
+        // Replaying: dense barrage every tick
         const buf = state.replayBuffer;
-        if (buf.length > 0 && data.shootTimer >= 0.15) {
+        if (buf.length > 0 && data.shootTimer >= BAL.bossTypes.echo.replayShootInterval) {
           const idx = Math.floor(data.replayIndex) % buf.length;
-          if (buf[idx].shooting) {
+          if (BAL.bossTypes.echo.replayAlwaysFire || buf[idx].shooting) {
             data.shootTimer = 0;
             const angle = Math.atan2(player.y - e.y, player.x - e.x);
             const speed = BAL.attacks.aimed.baseSpeed + state.wave * BAL.attacks.aimed.speedPerWave * 1.2;
